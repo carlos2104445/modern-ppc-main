@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
-import { storage } from "../storage";
+import { pgStorage as storage } from "../pg-storage";
 import { AuthErrors } from "../errors";
 import { jwtService } from "../jwt";
 

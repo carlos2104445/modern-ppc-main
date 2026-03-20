@@ -12,12 +12,12 @@ import {
   Copy,
   ExternalLink,
   ArrowUpRight,
-  ArrowDownRight,
   Play,
   Pause,
   DollarSign,
   Trophy,
   Zap,
+  Loader2,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
@@ -29,14 +29,19 @@ import { DailyStreak } from "@/components/daily-streak";
 import { GoalProgress } from "@/components/goal-progress";
 import { AchievementHighlights } from "@/components/achievement-highlights";
 import { LeaderboardPreview } from "@/components/leaderboard-preview";
+import { useAuth } from "@/hooks/use-auth-context";
 
 export default function Dashboard() {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
+  const { user, loading } = useAuth();
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   const [greeting, setGreeting] = useState("");
+  const [stats, setStats] = useState<any>(null);
 
-  const referralLink = "https://adconnect.app/ref/JD123456";
+  const referralLink = user?.referralCode
+    ? `https://adconnect.app/ref/${user.referralCode}`
+    : "https://adconnect.app";
 
   useEffect(() => {
     const hour = new Date().getHours();
@@ -45,34 +50,36 @@ export default function Dashboard() {
     else setGreeting("Good evening");
   }, []);
 
-  const userStats = {
-    name: "John",
-    level: 12,
-    currentXP: 2450,
-    xpToNextLevel: 3000,
-    totalXP: 24500,
-    currentStreak: 5,
-    longestStreak: 14,
-    streakFreezes: 2,
-    rank: 45,
-    totalUsers: 1250,
-  };
+  useEffect(() => {
+    async function fetchStats() {
+      try {
+        const res = await fetch("/api/v1/user/stats", { credentials: "include" });
+        if (res.ok) {
+          const data = await res.json();
+          setStats(data);
+        }
+      } catch (err) {
+        console.error("Failed to fetch stats:", err);
+      }
+    }
+    if (user) fetchStats();
+  }, [user]);
 
   const earningsData = [
-    { date: "Mon", earnings: 45.5, clicks: 42 },
-    { date: "Tue", earnings: 52.3, clicks: 48 },
-    { date: "Wed", earnings: 38.2, clicks: 35 },
-    { date: "Thu", earnings: 67.8, clicks: 61 },
-    { date: "Fri", earnings: 71.4, clicks: 65 },
-    { date: "Sat", earnings: 55.9, clicks: 51 },
-    { date: "Sun", earnings: 49.2, clicks: 44 },
+    { date: "Mon", earnings: 0, clicks: 0 },
+    { date: "Tue", earnings: 0, clicks: 0 },
+    { date: "Wed", earnings: 0, clicks: 0 },
+    { date: "Thu", earnings: 0, clicks: 0 },
+    { date: "Fri", earnings: 0, clicks: 0 },
+    { date: "Sat", earnings: 0, clicks: 0 },
+    { date: "Sun", earnings: 0, clicks: 0 },
   ];
 
   const goals = [
     {
       id: "1",
       title: "Daily Ad Views",
-      current: 42,
+      current: 0,
       target: 50,
       unit: "ads",
       period: "daily" as const,
@@ -81,20 +88,11 @@ export default function Dashboard() {
     {
       id: "2",
       title: "Weekly Earnings",
-      current: 234.5,
+      current: parseFloat(stats?.lifetimeEarnings || "0"),
       target: 500,
       unit: "ETB",
       period: "weekly" as const,
       reward: "ETB 25 bonus",
-    },
-    {
-      id: "3",
-      title: "Referral Challenge",
-      current: 3,
-      target: 5,
-      unit: "referrals",
-      period: "monthly" as const,
-      reward: "Premium Badge",
     },
   ];
 
@@ -113,101 +111,16 @@ export default function Dashboard() {
       id: "2",
       title: "Century Club",
       description: "Earn ETB 100 in total",
-      progress: 87,
+      progress: Math.min(parseFloat(stats?.lifetimeEarnings || "0"), 100),
       target: 100,
-      unlocked: false,
+      unlocked: parseFloat(stats?.lifetimeEarnings || "0") >= 100,
       rarity: "rare" as const,
       reward: "+200 XP",
-    },
-    {
-      id: "3",
-      title: "Referral Master",
-      description: "Refer 10 active users",
-      progress: 7,
-      target: 10,
-      unlocked: false,
-      rarity: "epic" as const,
-      reward: "Premium Badge",
-    },
-    {
-      id: "4",
-      title: "Streak Champion",
-      description: "Maintain a 30-day streak",
-      progress: 5,
-      target: 30,
-      unlocked: false,
-      rarity: "legendary" as const,
-      reward: "+1000 XP",
     },
   ];
 
   const leaderboardData = [
-    { rank: 1, username: "ProClicker", earnings: "ETB 12,450", isCurrentUser: false },
-    { rank: 2, username: "AdMaster99", earnings: "ETB 11,230", isCurrentUser: false },
-    { rank: 3, username: "EarnKing", earnings: "ETB 10,875", isCurrentUser: false },
-    { rank: 4, username: "TopEarner", earnings: "ETB 9,560", isCurrentUser: false },
-    { rank: 45, username: "John", earnings: "ETB 5,679", isCurrentUser: true },
-  ];
-
-  const recentActivity = [
-    {
-      id: "1",
-      type: "earning",
-      title: "Ad View Completed",
-      description: "YouTube ad - Tech Product Launch",
-      amount: "+ETB 2.50",
-      time: "5 minutes ago",
-      icon: MousePointerClick,
-      color: "text-chart-2",
-    },
-    {
-      id: "2",
-      type: "campaign",
-      title: "Campaign Paused",
-      description: "Summer Sale Campaign",
-      time: "1 hour ago",
-      icon: Pause,
-      color: "text-chart-4",
-    },
-    {
-      id: "3",
-      type: "earning",
-      title: "Referral Commission",
-      description: "From user @john_doe",
-      amount: "+ETB 15.00",
-      time: "2 hours ago",
-      icon: Users,
-      color: "text-chart-2",
-    },
-    {
-      id: "4",
-      type: "withdrawal",
-      title: "Withdrawal Processed",
-      description: "Bank Transfer to 1234******5678",
-      amount: "-ETB 500.00",
-      time: "3 hours ago",
-      icon: ArrowUpRight,
-      color: "text-chart-1",
-    },
-    {
-      id: "5",
-      type: "campaign",
-      title: "Campaign Started",
-      description: "Product Launch 2024",
-      time: "5 hours ago",
-      icon: Play,
-      color: "text-chart-2",
-    },
-    {
-      id: "6",
-      type: "earning",
-      title: "Ad View Completed",
-      description: "Banner ad - Fashion Brand",
-      amount: "+ETB 1.75",
-      time: "6 hours ago",
-      icon: MousePointerClick,
-      color: "text-chart-2",
-    },
+    { rank: 1, username: "—", earnings: "—", isCurrentUser: false },
   ];
 
   const handleCopyReferral = () => {
@@ -218,11 +131,29 @@ export default function Dashboard() {
     });
   };
 
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  const userName = user?.firstName || user?.username || "User";
+  const balance = parseFloat(user?.balance || "0").toFixed(2);
+  const lifetime = parseFloat(user?.lifetimeEarnings || "0").toFixed(2);
+  const xp = user?.xp || 0;
+  const level = user?.level || 1;
+  const xpToNext = level * 500;
+  const streak = user?.currentStreak || 0;
+  const longestStreak = user?.longestStreak || 0;
+  const streakFreezes = user?.streakFreezes || 0;
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold">
-          {greeting}, {userStats.name}! 👋
+          {greeting}, {userName}! 👋
         </h1>
         <p className="text-muted-foreground mt-1">Here's what's happening with your account</p>
       </div>
@@ -230,16 +161,16 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
           <LevelProgressBar
-            level={userStats.level}
-            currentXP={userStats.currentXP}
-            xpToNextLevel={userStats.xpToNextLevel}
-            totalXP={userStats.totalXP}
+            level={level}
+            currentXP={xp % xpToNext}
+            xpToNextLevel={xpToNext}
+            totalXP={xp}
           />
         </div>
         <DailyStreak
-          currentStreak={userStats.currentStreak}
-          longestStreak={userStats.longestStreak}
-          streakFreezes={userStats.streakFreezes}
+          currentStreak={streak}
+          longestStreak={longestStreak}
+          streakFreezes={streakFreezes}
         />
       </div>
 
@@ -251,8 +182,8 @@ export default function Dashboard() {
         >
           <StatCard
             title="Wallet Balance"
-            value="ETB 1,234.56"
-            description="Available for withdrawal"
+            value={`ETB ${balance}`}
+            description="Available for use"
             icon={Wallet}
             variant="primary"
           />
@@ -264,36 +195,34 @@ export default function Dashboard() {
         >
           <StatCard
             title="Lifetime Earnings"
-            value="ETB 5,678.90"
+            value={`ETB ${lifetime}`}
             description="Total earned"
             icon={TrendingUp}
-            trend={{ value: "12.5%", isPositive: true }}
             variant="highlighted"
           />
         </div>
         <div
-          onClick={() => setLocation("/earn")}
+          onClick={() => setLocation("/campaigns")}
           className="cursor-pointer"
-          data-testid="card-ads-clicked"
+          data-testid="card-campaigns"
         >
           <StatCard
-            title="Ads Clicked Today"
-            value="42"
-            description="Daily clicks"
+            title="Active Campaigns"
+            value={stats?.activeCampaigns?.toString() || "0"}
+            description={`${stats?.totalCampaigns || 0} total`}
             icon={MousePointerClick}
           />
         </div>
         <div
-          onClick={() => setLocation("/referrals")}
+          onClick={() => setLocation("/campaigns")}
           className="cursor-pointer"
-          data-testid="card-active-referrals"
+          data-testid="card-in-escrow"
         >
           <StatCard
-            title="Active Referrals"
-            value="23"
-            description="Total network"
-            icon={Users}
-            trend={{ value: "3 new", isPositive: true }}
+            title="In Escrow"
+            value={`ETB ${stats?.totalInEscrow || "0.00"}`}
+            description="Campaign funds held"
+            icon={DollarSign}
           />
         </div>
       </div>
@@ -375,7 +304,7 @@ export default function Dashboard() {
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-3">
-            <CardTitle>Recent Activity</CardTitle>
+            <CardTitle>Recent Transactions</CardTitle>
             <Button
               variant="ghost"
               size="sm"
@@ -388,57 +317,47 @@ export default function Dashboard() {
           <CardContent className="p-0">
             <ScrollArea className="h-[300px]">
               <div className="space-y-1 px-6 pb-6">
-                {recentActivity.map((activity) => {
-                  const Icon = activity.icon;
-                  return (
+                {stats?.recentTransactions && stats.recentTransactions.length > 0 ? (
+                  stats.recentTransactions.map((tx: any) => (
                     <div
-                      key={activity.id}
-                      className="flex items-start gap-3 p-3 rounded-lg hover-elevate active-elevate-2 cursor-pointer"
-                      data-testid={`activity-item-${activity.id}`}
+                      key={tx.id}
+                      className="flex items-start gap-3 p-3 rounded-lg hover-elevate cursor-pointer"
                     >
-                      <div className={`p-2 rounded-lg bg-muted ${activity.color}`}>
-                        <Icon className="h-4 w-4" />
+                      <div className={`p-2 rounded-lg bg-muted ${parseFloat(tx.amount) >= 0 ? 'text-chart-2' : 'text-chart-1'}`}>
+                        <DollarSign className="h-4 w-4" />
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1 min-w-0">
-                            <p
-                              className="text-sm font-medium"
-                              data-testid={`activity-title-${activity.id}`}
-                            >
-                              {activity.title}
+                            <p className="text-sm font-medium capitalize">
+                              {tx.type.replace(/_/g, " ")}
                             </p>
-                            <p
-                              className="text-xs text-muted-foreground truncate"
-                              data-testid={`activity-description-${activity.id}`}
-                            >
-                              {activity.description}
+                            <p className="text-xs text-muted-foreground truncate">
+                              {tx.description}
                             </p>
                           </div>
-                          {activity.amount && (
-                            <Badge
-                              variant="outline"
-                              className={
-                                activity.amount.startsWith("+")
-                                  ? "bg-chart-2/10 text-chart-2"
-                                  : "bg-chart-1/10 text-chart-1"
-                              }
-                              data-testid={`activity-amount-${activity.id}`}
-                            >
-                              {activity.amount}
-                            </Badge>
-                          )}
+                          <Badge
+                            variant="outline"
+                            className={
+                              parseFloat(tx.amount) >= 0
+                                ? "bg-chart-2/10 text-chart-2"
+                                : "bg-chart-1/10 text-chart-1"
+                            }
+                          >
+                            {parseFloat(tx.amount) >= 0 ? "+" : ""}ETB {tx.amount}
+                          </Badge>
                         </div>
-                        <p
-                          className="text-xs text-muted-foreground mt-1"
-                          data-testid={`activity-time-${activity.id}`}
-                        >
-                          {activity.time}
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {new Date(tx.createdAt).toLocaleDateString()}
                         </p>
                       </div>
                     </div>
-                  );
-                })}
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground text-center py-8">
+                    No transactions yet
+                  </p>
+                )}
               </div>
             </ScrollArea>
           </CardContent>
@@ -449,8 +368,8 @@ export default function Dashboard() {
         <AchievementHighlights achievements={achievements} />
         <LeaderboardPreview
           entries={leaderboardData}
-          userRank={userStats.rank}
-          totalUsers={userStats.totalUsers}
+          userRank={0}
+          totalUsers={0}
         />
       </div>
 

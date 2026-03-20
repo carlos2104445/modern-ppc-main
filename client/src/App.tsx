@@ -12,6 +12,7 @@ import { AdminHeader } from "@/components/admin-header";
 import { NotificationsBell } from "@/components/notifications-bell";
 import { useAdminAuth } from "@/hooks/use-admin-auth";
 import { useUserAuth } from "@/hooks/use-user-auth";
+import { AuthProvider } from "@/hooks/use-auth-context";
 
 const NotFound = lazy(() => import("@/pages/not-found"));
 const Landing = lazy(() => import("@/pages/landing"));
@@ -210,7 +211,9 @@ export default function App() {
       <ThemeProvider defaultTheme="light" storageKey="adconnect-theme">
         <TooltipProvider>
           <Router>
-            <AppContent />
+            <AuthProvider>
+              <AppContent />
+            </AuthProvider>
           </Router>
           <Toaster />
         </TooltipProvider>

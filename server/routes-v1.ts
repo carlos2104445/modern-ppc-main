@@ -286,6 +286,159 @@ export function registerV1Routes(app: Express): void {
   });
 
   // ==========================================
+  // User profile & data routes
+  // ==========================================
+
+  // Get current user profile
+  app.get(`${API_PREFIX}/user/profile`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid or expired token" });
+
+      const user = await storage.getUser(decoded.userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      const { password: _, ...profile } = user;
+      res.json(profile);
+    } catch (error: any) {
+      res.status(401).json({ error: error.message || "Authentication failed" });
+    }
+  });
+
+  // Update user profile
+  app.patch(`${API_PREFIX}/user/profile`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid or expired token" });
+
+      const { firstName, lastName, phoneNumber, dateOfBirth } = req.body;
+      const updates: any = {};
+      if (firstName) updates.firstName = firstName;
+      if (lastName) updates.lastName = lastName;
+      if (phoneNumber) updates.phoneNumber = phoneNumber;
+      if (dateOfBirth !== undefined) updates.dateOfBirth = dateOfBirth;
+      if (firstName || lastName) {
+        const user = await storage.getUser(decoded.userId);
+        updates.fullName = `${firstName || user?.firstName} ${lastName || user?.lastName}`;
+      }
+
+      await storage.updateUser(decoded.userId, updates);
+      const updatedUser = await storage.getUser(decoded.userId);
+      if (!updatedUser) return res.status(404).json({ error: "User not found" });
+
+      const { password: _, ...profile } = updatedUser;
+      res.json(profile);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "Failed to update profile" });
+    }
+  });
+
+  // Get user's transaction history
+  app.get(`${API_PREFIX}/user/transactions`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid or expired token" });
+
+      const transactions = await storage.getTransactionsByUserId(decoded.userId);
+      res.json(transactions);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch transactions" });
+    }
+  });
+
+  // Get user dashboard stats
+  app.get(`${API_PREFIX}/user/stats`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid or expired token" });
+
+      const user = await storage.getUser(decoded.userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      const { campaignService } = await import("./campaign-service");
+      const campaigns = await campaignService.getUserCampaigns(decoded.userId);
+      const transactions = await storage.getTransactionsByUserId(decoded.userId);
+
+      const activeCampaigns = campaigns.filter(c => c.status === "active").length;
+      const totalCampaignSpent = campaigns.reduce((s, c) => s + parseFloat(c.spent || "0"), 0);
+      const totalEscrow = campaigns.reduce((s, c) => {
+        const remaining = parseFloat(c.escrowAmount || "0") - parseFloat(c.spent || "0") - parseFloat(c.refundedAmount || "0");
+        return s + Math.max(remaining, 0);
+      }, 0);
+
+      res.json({
+        balance: user.balance,
+        lifetimeEarnings: user.lifetimeEarnings,
+        lifetimeSpending: user.lifetimeSpending,
+        xp: user.xp,
+        level: user.level,
+        currentStreak: user.currentStreak,
+        longestStreak: user.longestStreak,
+        streakFreezes: user.streakFreezes,
+        reputationScore: user.reputationScore,
+        referralCode: user.referralCode,
+        activeCampaigns,
+        totalCampaigns: campaigns.length,
+        totalCampaignSpent: totalCampaignSpent.toFixed(2),
+        totalInEscrow: totalEscrow.toFixed(2),
+        recentTransactions: transactions.slice(0, 10),
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch stats" });
+    }
+  });
+
+  // ==========================================
+  // Earn routes — ads available for viewing
+  // ==========================================
+
+  // Get available ads (active campaigns from other users)
+  app.get(`${API_PREFIX}/earn/ads`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid or expired token" });
+
+      const { campaignService } = await import("./campaign-service");
+      const allCampaigns = await campaignService.getAllCampaigns();
+
+      // Show active campaigns from OTHER users as ads
+      const availableAds = allCampaigns
+        .filter(c => c.status === "active" && c.userId !== decoded.userId)
+        .map(c => ({
+          id: c.id,
+          title: c.name,
+          name: c.name,
+          description: c.description,
+          type: c.type,
+          url: c.url,
+          imageUrl: c.imageUrl,
+          cpc: c.cpc,
+          duration: c.duration,
+          advertiserName: "Advertiser",
+        }));
+
+      res.json(availableAds);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch ads" });
+    }
+  });
+
+  // ==========================================
   // Campaign routes (with escrow/refund)
   // ==========================================
 

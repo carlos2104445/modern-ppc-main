@@ -1,95 +1,57 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { AdCard } from "@/components/ad-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Search, DollarSign, MousePointerClick, TrendingUp } from "lucide-react";
+import { Search, DollarSign, MousePointerClick, TrendingUp, Loader2 } from "lucide-react";
 import { AdViewerDialog } from "@/components/ad-viewer-dialog";
-import { useUserAuth } from "@/hooks/use-user-auth";
+import { useAuth } from "@/hooks/use-auth-context";
 
 export default function Earn() {
-  const { getCurrentUser } = useUserAuth();
-  const currentUser = getCurrentUser();
+  const { user } = useAuth();
   const [viewerDialogOpen, setViewerDialogOpen] = useState(false);
   const [selectedAd, setSelectedAd] = useState<any>(null);
+  const [ads, setAds] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
 
-  const ads = [
-    {
-      id: "1",
-      title: "Premium Fitness App",
-      description: "Discover the ultimate fitness tracking app with AI-powered workout plans",
-      payout: "ETB 0.05",
-      duration: 15,
-      advertiser: "FitnessPro Inc",
-      type: "link" as const,
-      targetUrl: "https://fitness-pro.example.com",
-    },
-    {
-      id: "2",
-      title: "Online Learning Platform",
-      description: "Learn new skills from industry experts with our comprehensive courses",
-      payout: "ETB 0.08",
-      duration: 20,
-      advertiser: "EduMaster",
-      type: "youtube" as const,
-      videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    },
-    {
-      id: "3",
-      title: "E-commerce Store Sale",
-      description: "Get 50% off on all electronics this week only - limited time offer",
-      payout: "ETB 0.03",
-      duration: 10,
-      advertiser: "TechDeals",
-      type: "banner" as const,
-      imageUrl: "https://via.placeholder.com/800x400/4F46E5/FFFFFF?text=TechDeals+Sale",
-    },
-    {
-      id: "4",
-      title: "Travel Booking Platform",
-      description: "Find the best deals on flights, hotels, and vacation packages",
-      payout: "ETB 0.06",
-      duration: 18,
-      advertiser: "TravelHub",
-      type: "link" as const,
-      targetUrl: "https://travel-hub.example.com",
-    },
-    {
-      id: "5",
-      title: "Cloud Storage Service",
-      description: "Secure cloud storage with 2TB free trial for new users",
-      payout: "ETB 0.07",
-      duration: 25,
-      advertiser: "CloudVault",
-      type: "youtube" as const,
-      videoUrl: "https://www.youtube.com/watch?v=jNQXAC9IVRw",
-    },
-    {
-      id: "6",
-      title: "Gaming Platform",
-      description: "Play thousands of games with unlimited access subscription",
-      payout: "ETB 0.04",
-      duration: 12,
-      advertiser: "GameZone",
-      type: "banner" as const,
-      imageUrl: "https://via.placeholder.com/800x400/10B981/FFFFFF?text=GameZone+Platform",
-    },
-  ];
+  useEffect(() => {
+    async function fetchAds() {
+      try {
+        // Fetch active campaigns that users can view as ads
+        const res = await fetch("/api/v1/earn/ads", { credentials: "include" });
+        if (res.ok) {
+          const data = await res.json();
+          setAds(data);
+        }
+      } catch (err) {
+        console.error("Failed to fetch ads:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchAds();
+  }, []);
+
+  const filteredAds = ads.filter((ad) =>
+    ad.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    ad.name?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   const stats = [
     {
       title: "Today's Earnings",
-      value: "ETB 1.23",
+      value: `ETB ${parseFloat(user?.lifetimeEarnings || "0").toFixed(2)}`,
       icon: DollarSign,
-    },
-    {
-      title: "Ads Viewed Today",
-      value: "15",
-      icon: MousePointerClick,
     },
     {
       title: "Available Ads",
       value: ads.length.toString(),
       icon: TrendingUp,
+    },
+    {
+      title: "Your Balance",
+      value: `ETB ${parseFloat(user?.balance || "0").toFixed(2)}`,
+      icon: MousePointerClick,
     },
   ];
 
@@ -122,18 +84,44 @@ export default function Earn() {
 
       <div className="relative max-w-md">
         <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input placeholder="Search ads..." className="pl-9" data-testid="input-search-ads" />
+        <Input
+          placeholder="Search ads..."
+          className="pl-9"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          data-testid="input-search-ads"
+        />
       </div>
 
       <div>
         <h2 className="text-lg font-semibold mb-4">Available Ads</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {ads.map((ad) => (
-            <div key={ad.id} onClick={() => handleAdClick(ad)}>
-              <AdCard {...ad} />
-            </div>
-          ))}
-        </div>
+        {loading ? (
+          <div className="flex justify-center py-12">
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          </div>
+        ) : filteredAds.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {filteredAds.map((ad) => (
+              <div key={ad.id} onClick={() => handleAdClick(ad)}>
+                <AdCard
+                  id={ad.id}
+                  title={ad.name || ad.title}
+                  description={ad.description || "View this ad to earn"}
+                  payout={`ETB ${parseFloat(ad.cpc || "0.05").toFixed(2)}`}
+                  duration={ad.duration || 15}
+                  advertiser={ad.advertiserName || "Advertiser"}
+                  type={ad.type || "link"}
+                />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-12">
+              <p className="text-muted-foreground">No ads available right now. Check back later!</p>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       {selectedAd && (
@@ -141,7 +129,7 @@ export default function Earn() {
           open={viewerDialogOpen}
           onOpenChange={setViewerDialogOpen}
           ad={selectedAd}
-          userId={currentUser?.id || "demo-user"}
+          userId={user?.id || "demo-user"}
         />
       )}
     </div>

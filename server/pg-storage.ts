@@ -8,6 +8,7 @@ import {
   depositRequests,
   financialSettings,
   transactionLogs,
+  transactions,
   passwordResetTokens,
   referralSettings,
   roles,
@@ -377,6 +378,16 @@ export class PostgreSQLStorage implements IStorage {
   async createTransactionLog(insertLog: InsertTransactionLog): Promise<TransactionLog> {
     const [log] = await db.insert(transactionLogs).values(insertLog).returning();
     return log;
+  }
+
+  // User transactions
+  async getTransactionsByUserId(userId: string) {
+    return await db
+      .select()
+      .from(transactions)
+      .where(eq(transactions.userId, userId))
+      .orderBy(desc(transactions.createdAt))
+      .limit(50);
   }
 
   async createPasswordResetToken(
