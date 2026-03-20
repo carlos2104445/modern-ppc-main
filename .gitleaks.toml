@@ -1,0 +1,254 @@
+title = "Gitleaks Configuration for Modern PPC"
+
+[extend]
+# useDefault will extend the base configuration with the default gitleaks config:
+# https://github.com/zricethezav/gitleaks/blob/master/config/gitleaks.toml
+useDefault = true
+
+[allowlist]
+description = "Allowlist for false positives"
+paths = [
+  '''node_modules/''',
+  '''\.git/''',
+  '''dist/''',
+  '''build/''',
+  '''coverage/''',
+  '''\.next/''',
+]
+
+regexes = [
+  '''test-secret-key''',
+  '''example\.com''',
+  '''localhost''',
+  '''127\.0\.0\.1''',
+]
+
+[[rules]]
+id = "aws-access-key"
+description = "AWS Access Key"
+regex = '''(A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}'''
+tags = ["key", "AWS"]
+[rules.allowlist]
+regexes = [
+  '''AKIAIOSFODNN7EXAMPLE''',
+]
+
+[[rules]]
+id = "aws-secret-key"
+description = "AWS Secret Key"
+regex = '''(?i)aws(.{0,20})?(?-i)['\"][0-9a-zA-Z\/+]{40}['\"]'''
+tags = ["key", "AWS"]
+
+[[rules]]
+id = "github-pat"
+description = "GitHub Personal Access Token"
+regex = '''ghp_[0-9a-zA-Z]{36}'''
+tags = ["key", "GitHub"]
+
+[[rules]]
+id = "github-oauth"
+description = "GitHub OAuth Access Token"
+regex = '''gho_[0-9a-zA-Z]{36}'''
+tags = ["key", "GitHub"]
+
+[[rules]]
+id = "github-app-token"
+description = "GitHub App Token"
+regex = '''(ghu|ghs)_[0-9a-zA-Z]{36}'''
+tags = ["key", "GitHub"]
+
+[[rules]]
+id = "github-refresh-token"
+description = "GitHub Refresh Token"
+regex = '''ghr_[0-9a-zA-Z]{76}'''
+tags = ["key", "GitHub"]
+
+[[rules]]
+id = "slack-token"
+description = "Slack Token"
+regex = '''xox[baprs]-([0-9a-zA-Z]{10,48})?'''
+tags = ["key", "Slack"]
+
+[[rules]]
+id = "slack-webhook"
+description = "Slack Webhook"
+regex = '''https://hooks\.slack\.com/services/T[a-zA-Z0-9_]{8}/B[a-zA-Z0-9_]{8}/[a-zA-Z0-9_]{24}'''
+tags = ["key", "Slack"]
+
+[[rules]]
+id = "stripe-key"
+description = "Stripe API Key"
+regex = '''(?i)(sk|pk)_(test|live)_[0-9a-zA-Z]{24,99}'''
+tags = ["key", "Stripe"]
+
+[[rules]]
+id = "jwt-token"
+description = "JWT Token"
+regex = '''eyJ[A-Za-z0-9-_=]+\.eyJ[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*'''
+tags = ["key", "JWT"]
+[rules.allowlist]
+paths = [
+  '''__tests__/''',
+  '''test/''',
+  '''\.test\.ts''',
+  '''\.spec\.ts''',
+]
+
+[[rules]]
+id = "private-key"
+description = "Private Key"
+regex = '''-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----'''
+tags = ["key", "private"]
+
+[[rules]]
+id = "generic-api-key"
+description = "Generic API Key"
+regex = '''(?i)(api[_-]?key|apikey|access[_-]?key|secret[_-]?key)['"]?\s*[:=]\s*['"]?[0-9a-zA-Z\-_]{20,}'''
+tags = ["key", "API"]
+[rules.allowlist]
+paths = [
+  '''__tests__/''',
+  '''test/''',
+  '''\.test\.ts''',
+  '''\.spec\.ts''',
+  '''README\.md''',
+  '''docs/''',
+]
+
+[[rules]]
+id = "password-in-code"
+description = "Password in Code"
+regex = '''(?i)(password|passwd|pwd)['"]?\s*[:=]\s*['"][^'"]{8,}['"]'''
+tags = ["password"]
+[rules.allowlist]
+paths = [
+  '''__tests__/''',
+  '''test/''',
+  '''\.test\.ts''',
+  '''\.spec\.ts''',
+  '''e2e/''',
+]
+regexes = [
+  '''password123''',
+  '''testpassword''',
+  '''admin123''',
+]
+
+[[rules]]
+id = "database-connection-string"
+description = "Database Connection String"
+regex = '''(?i)(postgres|mysql|mongodb|redis)://[^:]+:[^@]+@[^/]+'''
+tags = ["database", "connection"]
+[rules.allowlist]
+paths = [
+  '''__tests__/''',
+  '''test/''',
+  '''\.test\.ts''',
+  '''\.spec\.ts''',
+]
+regexes = [
+  '''localhost''',
+  '''127\.0\.0\.1''',
+]
+
+[[rules]]
+id = "chapa-secret-key"
+description = "Chapa Secret Key"
+regex = '''(?i)chapa[_-]?(secret|key)['"]?\s*[:=]\s*['"]?[0-9a-zA-Z\-_]{20,}'''
+tags = ["key", "Chapa", "payment"]
+
+[[rules]]
+id = "sendgrid-api-key"
+description = "SendGrid API Key"
+regex = '''SG\.[a-zA-Z0-9_-]{22}\.[a-zA-Z0-9_-]{43}'''
+tags = ["key", "SendGrid"]
+
+[[rules]]
+id = "twilio-api-key"
+description = "Twilio API Key"
+regex = '''SK[0-9a-fA-F]{32}'''
+tags = ["key", "Twilio"]
+
+[[rules]]
+id = "google-api-key"
+description = "Google API Key"
+regex = '''AIza[0-9A-Za-z\-_]{35}'''
+tags = ["key", "Google"]
+
+[[rules]]
+id = "google-oauth"
+description = "Google OAuth"
+regex = '''[0-9]+-[0-9A-Za-z_]{32}\.apps\.googleusercontent\.com'''
+tags = ["key", "Google", "OAuth"]
+
+[[rules]]
+id = "heroku-api-key"
+description = "Heroku API Key"
+regex = '''[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'''
+tags = ["key", "Heroku"]
+
+[[rules]]
+id = "mailchimp-api-key"
+description = "Mailchimp API Key"
+regex = '''[0-9a-f]{32}-us[0-9]{1,2}'''
+tags = ["key", "Mailchimp"]
+
+[[rules]]
+id = "mailgun-api-key"
+description = "Mailgun API Key"
+regex = '''key-[0-9a-zA-Z]{32}'''
+tags = ["key", "Mailgun"]
+
+[[rules]]
+id = "npm-token"
+description = "NPM Token"
+regex = '''npm_[A-Za-z0-9]{36}'''
+tags = ["key", "NPM"]
+
+[[rules]]
+id = "pypi-token"
+description = "PyPI Token"
+regex = '''pypi-AgEIcHlwaS5vcmc[A-Za-z0-9\-_]{50,1000}'''
+tags = ["key", "PyPI"]
+
+[[rules]]
+id = "docker-config"
+description = "Docker Config"
+regex = '''(?i)"auth"\s*:\s*"[A-Za-z0-9+/=]{20,}"'''
+tags = ["key", "Docker"]
+
+[[rules]]
+id = "ssh-private-key"
+description = "SSH Private Key"
+regex = '''-----BEGIN OPENSSH PRIVATE KEY-----'''
+tags = ["key", "SSH"]
+
+[[rules]]
+id = "pgp-private-key"
+description = "PGP Private Key"
+regex = '''-----BEGIN PGP PRIVATE KEY BLOCK-----'''
+tags = ["key", "PGP"]
+
+[[rules]]
+id = "facebook-access-token"
+description = "Facebook Access Token"
+regex = '''EAACEdEose0cBA[0-9A-Za-z]+'''
+tags = ["key", "Facebook"]
+
+[[rules]]
+id = "twitter-access-token"
+description = "Twitter Access Token"
+regex = '''[1-9][0-9]+-[0-9a-zA-Z]{40}'''
+tags = ["key", "Twitter"]
+
+[[rules]]
+id = "linkedin-client-id"
+description = "LinkedIn Client ID"
+regex = '''(?i)linkedin(.{0,20})?['\"][0-9a-z]{12}['\"]'''
+tags = ["key", "LinkedIn"]
+
+[[rules]]
+id = "linkedin-secret-key"
+description = "LinkedIn Secret Key"
+regex = '''(?i)linkedin(.{0,20})?['\"][0-9a-z]{16}['\"]'''
+tags = ["key", "LinkedIn"]

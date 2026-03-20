@@ -1,0 +1,261 @@
+rules:
+  # Security Rules
+  - id: hardcoded-secret
+    patterns:
+      - pattern-either:
+          - pattern: |
+              const $VAR = "$SECRET"
+          - pattern: |
+              let $VAR = "$SECRET"
+          - pattern: |
+              var $VAR = "$SECRET"
+      - metavariable-regex:
+          metavariable: $SECRET
+          regex: (password|secret|token|api[_-]?key|private[_-]?key|access[_-]?key).*=.*['\"][^'\"]{8,}['\"]
+    message: Potential hardcoded secret detected
+    languages: [javascript, typescript]
+    severity: ERROR
+
+  - id: sql-injection
+    patterns:
+      - pattern-either:
+          - pattern: |
+              db.query($QUERY + $INPUT)
+          - pattern: |
+              db.execute($QUERY + $INPUT)
+          - pattern: |
+              connection.query($QUERY + $INPUT)
+    message: Potential SQL injection vulnerability
+    languages: [javascript, typescript]
+    severity: ERROR
+
+  - id: command-injection
+    patterns:
+      - pattern-either:
+          - pattern: |
+              exec($CMD + $INPUT)
+          - pattern: |
+              execSync($CMD + $INPUT)
+          - pattern: |
+              spawn($CMD, [..., $INPUT, ...])
+    message: Potential command injection vulnerability
+    languages: [javascript, typescript]
+    severity: ERROR
+
+  - id: path-traversal
+    patterns:
+      - pattern-either:
+          - pattern: |
+              fs.readFile($PATH + $INPUT, ...)
+          - pattern: |
+              fs.readFileSync($PATH + $INPUT, ...)
+          - pattern: |
+              fs.writeFile($PATH + $INPUT, ...)
+          - pattern: |
+              fs.writeFileSync($PATH + $INPUT, ...)
+    message: Potential path traversal vulnerability
+    languages: [javascript, typescript]
+    severity: ERROR
+
+  - id: insecure-random
+    patterns:
+      - pattern: Math.random()
+    message: Math.random() is not cryptographically secure. Use crypto.randomBytes() instead
+    languages: [javascript, typescript]
+    severity: WARNING
+
+  - id: weak-crypto
+    patterns:
+      - pattern-either:
+          - pattern: |
+              crypto.createHash("md5")
+          - pattern: |
+              crypto.createHash("sha1")
+    message: Weak cryptographic hash function. Use SHA-256 or stronger
+    languages: [javascript, typescript]
+    severity: WARNING
+
+  - id: jwt-no-verify
+    patterns:
+      - pattern: jwt.decode($TOKEN)
+    message: JWT token decoded without verification. Use jwt.verify() instead
+    languages: [javascript, typescript]
+    severity: ERROR
+
+  - id: eval-usage
+    patterns:
+      - pattern-either:
+          - pattern: eval($INPUT)
+          - pattern: Function($INPUT)
+    message: Use of eval() or Function() constructor is dangerous
+    languages: [javascript, typescript]
+    severity: ERROR
+
+  - id: unsafe-regex
+    patterns:
+      - pattern-regex: /(.*\+.*\*|.*\*.*\+)/
+    message: Potential ReDoS vulnerability in regex
+    languages: [javascript, typescript]
+    severity: WARNING
+
+  # Authentication & Authorization
+  - id: missing-auth-check
+    patterns:
+      - pattern: |
+          router.$METHOD($PATH, async ($REQ, $RES) => {
+            ...
+          })
+      - pattern-not-inside: |
+          router.$METHOD($PATH, authenticate, ...)
+      - pattern-not-inside: |
+          router.$METHOD($PATH, requireAuth, ...)
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^/api/(users|campaigns|payments|admin).*
+    message: API endpoint missing authentication middleware
+    languages: [javascript, typescript]
+    severity: WARNING
+
+  - id: missing-rate-limit
+    patterns:
+      - pattern: |
+          router.post($PATH, ...)
+      - pattern-not-inside: |
+          router.post($PATH, rateLimit(...), ...)
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^/api/(auth/login|auth/register|payments).*
+    message: Sensitive endpoint missing rate limiting
+    languages: [javascript, typescript]
+    severity: WARNING
+
+  # Data Validation
+  - id: missing-input-validation
+    patterns:
+      - pattern: |
+          router.$METHOD($PATH, async ($REQ, $RES) => {
+            const $VAR = $REQ.body.$FIELD;
+            ...
+          })
+      - pattern-not-inside: |
+          if (!$VAR) { ... }
+      - pattern-not-inside: |
+          if ($VAR === undefined) { ... }
+    message: Missing input validation for user input
+    languages: [javascript, typescript]
+    severity: WARNING
+
+  - id: unsafe-redirect
+    patterns:
+      - pattern: |
+          $RES.redirect($REQ.query.$PARAM)
+    message: Unsafe redirect using user input
+    languages: [javascript, typescript]
+    severity: ERROR
+
+  # Logging & Error Handling
+  - id: sensitive-data-logging
+    patterns:
+      - pattern-either:
+          - pattern: |
+              console.log(..., $REQ.body.password, ...)
+          - pattern: |
+              logger.log(..., $REQ.body.password, ...)
+          - pattern: |
+              console.log(..., $REQ.headers.authorization, ...)
+    message: Logging sensitive data (password, token, etc.)
+    languages: [javascript, typescript]
+    severity: ERROR
+
+  - id: error-disclosure
+    patterns:
+      - pattern: |
+          $RES.status($CODE).json({ error: $ERR.message })
+    message: Exposing error details to client. Use generic error messages
+    languages: [javascript, typescript]
+    severity: WARNING
+
+  # Database Security
+  - id: missing-parameterized-query
+    patterns:
+      - pattern: |
+          db.query(`... ${$VAR} ...`)
+    message: Use parameterized queries instead of string interpolation
+    languages: [javascript, typescript]
+    severity: ERROR
+
+  - id: missing-transaction
+    patterns:
+      - pattern: |
+          await db.insert($TABLE1).values($VALUES1);
+          await db.insert($TABLE2).values($VALUES2);
+    message: Multiple database operations should be wrapped in a transaction
+    languages: [javascript, typescript]
+    severity: WARNING
+
+  # CORS & Headers
+  - id: permissive-cors
+    patterns:
+      - pattern: |
+          cors({ origin: "*" })
+    message: Permissive CORS policy allows all origins
+    languages: [javascript, typescript]
+    severity: WARNING
+
+  - id: missing-security-headers
+    patterns:
+      - pattern: |
+          app.use(...)
+      - pattern-not-inside: |
+          app.use(helmet())
+    message: Missing security headers middleware (helmet)
+    languages: [javascript, typescript]
+    severity: WARNING
+
+  # React/Frontend Security
+  - id: dangerous-html
+    patterns:
+      - pattern: |
+          dangerouslySetInnerHTML={{ __html: $VAR }}
+    message: Using dangerouslySetInnerHTML can lead to XSS vulnerabilities
+    languages: [typescript, typescriptreact]
+    severity: WARNING
+
+  - id: unsafe-target-blank
+    patterns:
+      - pattern: |
+          <a target="_blank" href={$URL}>
+      - pattern-not: |
+          <a target="_blank" rel="noopener noreferrer" href={$URL}>
+    message: target="_blank" without rel="noopener noreferrer" is a security risk
+    languages: [typescript, typescriptreact]
+    severity: WARNING
+
+  # Performance & Best Practices
+  - id: missing-error-boundary
+    patterns:
+      - pattern: |
+          class $COMPONENT extends React.Component {
+            ...
+          }
+      - pattern-not-inside: |
+          componentDidCatch(...) { ... }
+    message: React component missing error boundary
+    languages: [typescript, typescriptreact]
+    severity: INFO
+
+  - id: console-log-production
+    patterns:
+      - pattern-either:
+          - pattern: console.log(...)
+          - pattern: console.debug(...)
+    message: Remove console.log statements before production
+    languages: [javascript, typescript]
+    severity: INFO
+
+  - id: todo-comment
+    patterns:
+      - pattern-regex: (TODO|FIXME|HACK|XXX)
+    message: TODO/FIXME comment found
+    languages: [javascript, typescript]
+    severity: INFO

@@ -1,0 +1,49 @@
+Privacy Policy
+
+Last Updated: October 15, 2025
+
+This Privacy Policy describes how we collect, use, and handle your personal information when you use our web application and services. By using our service, you agree to the collection and use of information in accordance with this policy.
+
+1. Information Collection and Use
+
+We collect several different types of information for various purposes to provide and improve our service to you. This may include, but is not limited to:
+
+Personal identification information (Name, email address, etc.)
+
+Usage Data (such as your browser type, browser version, the pages of our service that you visit, the time and date of your visit, the time spent on those pages, unique device identifiers, and other diagnostic data).
+
+2. Use of Data
+
+The data we collect is used in various ways, including:
+
+To provide and maintain our service.
+
+To notify you about changes to our service.
+
+To provide customer support.
+
+To gather analysis or valuable information so that we can improve our service.
+
+To monitor the usage of our service.
+
+3. Sharing Data with Third Parties
+
+We may share your data with third-party companies and individuals to facilitate our service ("Service Providers"), to provide the service on our behalf, to perform service-related services, or to assist us in analyzing how our service is used.
+
+These third parties have access to your Personal Data only to perform these tasks on our behalf and are obligated not to disclose or use it for any other purpose. By using our service, you agree to this sharing of information.
+
+4. Data Security
+
+The security of your data is important to us. We use industry-grade security measures and protections to prevent unauthorized access, use, or disclosure of your personal information. However, remember that no method of transmission over the Internet or method of electronic storage is 100% secure.
+
+5. Governing Law
+
+This Privacy Policy is governed and construed in accordance with the laws of Ethiopia, without regard to its conflict of law provisions.
+
+6. Changes to This Privacy Policy
+
+We may update our Privacy Policy from time to time. We will notify you of any changes by posting the new Privacy Policy on this page. You are advised to review this Privacy Policy periodically for any changes.
+
+7. Contact Us
+
+If you have any questions about this Privacy Policy, please contact us.

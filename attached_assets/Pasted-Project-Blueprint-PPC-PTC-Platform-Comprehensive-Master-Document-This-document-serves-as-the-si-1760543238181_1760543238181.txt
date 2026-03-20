@@ -1,0 +1,219 @@
+Project Blueprint: PPC & PTC Platform (Comprehensive Master Document)
+This document serves as the single source of truth and master blueprint for the development of the PPC & PTC Platform. It combines the high-level system architecture with detailed functional specifications.
+
+1. Architectural Principles & Overview
+The system is designed as a modern, scalable web application following a full microservices architecture. A React SPA frontend communicates with a Python backend via a versioned, stateless RESTful API. The architecture is designed for resilience, security, and horizontal scalability from day one.
+
+High-Level Architectural Diagram
+
+                                                        +------------------------+
+                                                        | External Publisher     |
+                                                        | Website                |
+                                                        +-----------+------------+
+                                                                    | (Ad Request)
+                                                                    v
++------------------+      +---------------------+      +------------------------+
+|   User's Browser |----->|  React Frontend SPA |----->|    Backend API Gateway |
+| (Platform User)  |      | (Hosted on CDN/VPS) |      |    (Load Balancer)     |
++------------------+      +---------------------+      +-----------+------------+
+                                                                    |
+              +---------------------------------------------+---------------------------------------------+
+              |                                             |                                             |
+              v                                             v                                             v
++---------------------------+                 +---------------------------+                 +---------------------------+
+|      Auth Service         |                 |       Ad Service          |                 |      Wallet Service       |
+| (Users, Roles, 2FA, KYC)  |                 | (Campaigns, Ads, Clicks)  |                 | (Transactions, Finances)  |
++---------------------------+                 +---------------------------+                 +---------------------------+
+              |                                             ^                                             ^
+              |                                             |                                             |
+              +---------------------------------------------+---------------------------------------------+
+                                                            |
+                                                            v
++----------------------------------------------------------------------------------------------------------------------+
+|                                    Shared Infrastructure & Asynchronous Services                                     |
+|                                                                                                                      |
+| +---------------------+ +---------------------+ +---------------------+ +-----------------------+ +------------------+ |
+| |   PostgreSQL DB     | |      Redis Cache    | |  Task Queue (RabbitMQ)| |   Support Service     | | Notification Svc | |
+| | (Managed on DO)     | | (Sessions, Caching) | | (for Background Jobs) | | (Tickets & Replies)   | | (Email, SMS)     | |
+| +---------------------+ +---------------------+ +---------------------+ +-----------------------+ +------------------+ |
+|                                                                                                                      |
++----------------------------------------------------------------------------------------------------------------------+
+
+
+2. Frontend Specification (React SPA)
+The project includes two distinct React applications served from a single VPS.
+
+2.1. Unified User Dashboard
+
+A single, all-in-one dashboard for every registered user. The UI will be organized into clear sections, allowing users to seamlessly switch between earning and advertising activities.
+
+Dashboard / Overview: Landing page with summaries of wallet balance, lifetime earnings/spending, active campaigns, and daily clicks. Displays the user's unique referral link.
+
+Earn Money (View Ads): Page to browse and click on available PTC ads. Includes timers and the anti-fraud mechanism.
+
+Advertise (Campaigns): Section to manage ad campaigns and create new ads. Includes performance reports.
+
+Wallet: Interface for depositing funds, viewing transaction history, and managing withdrawal methods.
+
+Withdraw: Page to request withdrawals to a pre-approved method.
+
+Referrals: Page to view the referral tree (multi-level), track commission earnings, and copy the referral link.
+
+Support: Interface to create new support tickets and view replies to existing ones.
+
+Settings: Section for profile updates, password changes, 2FA management, and KYC document submission.
+
+2.2. Admin Dashboard
+
+A secure, role-based interface for staff. The features visible to a staff member will depend on their assigned role (e.g., a Support Agent cannot see financial settings).
+
+Dashboard / Overview: Landing page with alerts for pending KYC, withdrawals, ads, and support tickets. Shows key platform metrics (new users, total deposits, etc.).
+
+Customer Management: View, search, edit, and manage all users. Manually add/subtract balance, change status (active/banned), and view activity logs.
+
+KYC Management: Review pending KYC submissions, approve/reject documents, and view user KYC history.
+
+Roles & Staff Management: Create new staff roles (e.g., Finance Manager), assign specific permissions to each role, and create/manage staff accounts.
+
+Ad Management: View and manage all ads (pending, active, rejected).
+
+Publisher Management: Approve/reject external publisher websites.
+
+Financials:
+
+Transactions: View a log of all transactions on the platform.
+
+Payment Gateways: Configure automatic payment gateways.
+
+Deposits: Manage manual deposit methods and review deposit history.
+
+Withdrawals: Manage withdrawal methods and process pending withdrawal requests.
+
+Platform Configuration:
+
+Subscription Plans: Create and edit subscription tiers for users.
+
+Referral System: Configure the commission rates for each referral level.
+
+Support Ticket Manager: View and reply to all user support tickets.
+
+Communication Manager: Tools for sending mass emails or notifications to all users.
+
+3. Backend Specification (Microservices & API)
+All backend services are written in Python with FastAPI and communicate via a versioned REST API.
+
+3.1. Auth Service
+
+Responsibilities: User identity, authentication, authorization (roles/permissions), KYC, and reputation.
+
+API Endpoints (v1):
+
+POST /auth/register: Create a new user account.
+
+POST /auth/login: Authenticate a user and return a JWT.
+
+GET /auth/me: Get the current authenticated user's profile.
+
+POST /auth/2fa/enable: Start the 2FA setup process.
+
+POST /auth/kyc/submit: Submit KYC documents.
+
+GET /auth/withdrawal-methods: Get user's saved withdrawal methods.
+
+POST /auth/withdrawal-methods: Add a new withdrawal method.
+
+(Admin) GET /users: Get a list of all users.
+
+(Admin) POST /roles: Create a new admin role.
+
+(Admin) GET /kyc/pending: Get all pending KYC requests.
+
+Data Models: users, roles, permissions, kyc_verifications, user_withdrawal_methods, admin_audit_log.
+
+3.2. Ad Service
+
+Responsibilities: Ad/campaign lifecycle, click validation, anti-fraud, and the external publisher system.
+
+API Endpoints (v1):
+
+POST /campaigns: Create a new ad campaign.
+
+GET /campaigns/my: Get the user's campaigns.
+
+POST /ads: Create a new ad within a campaign.
+
+GET /ads/available: Get a list of ads available for a user to click.
+
+POST /ads/{id}/complete: Submit a completed ad click for validation.
+
+GET /serve/publisher/{id}: (External Endpoint) Serve an ad for a publisher site.
+
+(Admin) GET /ads/pending: Get all ads pending approval.
+
+Data Models: campaigns, ads, ad_clicks, publishers.
+
+3.3. Wallet Service
+
+Responsibilities: All financial operations, including deposits, withdrawals, internal transfers, subscriptions, and referral commissions.
+
+API Endpoints (v1):
+
+GET /wallet: Get the user's wallet balance and transaction history.
+
+POST /wallet/deposit/initialize: Start a deposit process with a payment gateway.
+
+POST /wallet/withdraw: Request a withdrawal.
+
+GET /referrals: Get the user's referral data and commission history.
+
+GET /subscriptions/plans: Get available subscription plans.
+
+POST /subscriptions/subscribe: Purchase a subscription plan.
+
+(Admin) POST /referrals/settings: Configure referral commission rates.
+
+(Admin) GET /withdrawals/pending: Get pending withdrawal requests.
+
+Data Models: transactions, subscription_plans, user_subscriptions, referral_settings.
+
+3.4. Support Ticket Service
+
+Responsibilities: Manages all support communications.
+
+API Endpoints (v1):
+
+POST /tickets: Create a new support ticket.
+
+GET /tickets: Get the user's support tickets.
+
+POST /tickets/{id}/reply: Add a reply to a ticket.
+
+(Admin) GET /tickets/pending: Get all open support tickets.
+
+Data Models: tickets, ticket_replies.
+
+4. Key Data Flows & Mechanics
+This section details the step-by-step processes for core platform features.
+
+Advertiser Reputation: A user's reputation_score in the users table is incremented by the Auth Service based on events from the Ad Service (e.g., "campaign_completed_successfully"). The Ad Service checks this score to determine if new ads require manual admin approval.
+
+User Ad Click: The frontend enforces a timer. On completion, the backend Ad Service validates the click using Google reCAPTCHA's score. If valid, it publishes a click_completed event to RabbitMQ.
+
+Referral Commission Processing: The Wallet Service listens for click_completed events. After processing the payment to the clicker, it calculates the platform's revenue from that click. It then queries the users table to find the referrer chain (up to 3 levels deep) and creates separate referral_commission transactions for each eligible referrer, crediting their wallets. This is all handled asynchronously to not delay the clicker's reward.
+
+Secure Withdrawals: The Wallet Service enforces the rule that the name on a user's withdrawal method must exactly match the name on their approved KYC documents before any withdrawal request can be processed.
+
+5. Infrastructure & Third-Party Integrations
+Hosting: Frontend on a dedicated VPS. Backend services containerized (e.g., using Docker) and deployed on VPSs. PostgreSQL and Redis hosted as managed services on DigitalOcean.
+
+Shared Infrastructure: PostgreSQL, Redis (for caching & rate limiting), RabbitMQ (for asynchronous tasks).
+
+Third-Party Integrations:
+
+Google reCAPTCHA: For anti-fraud.
+
+Google Analytics: For frontend traffic analysis.
+
+Payment Gateways: For processing deposits.
+
+Email/SMS Service: Used by the Notification Service to send communications.

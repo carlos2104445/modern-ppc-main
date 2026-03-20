@@ -1,0 +1,62 @@
+{
+  "dashboard": {
+    "title": "Modern PPC - Business Metrics",
+    "tags": ["modern-ppc", "business"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Campaigns Created",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(campaigns_created_total[5m])",
+            "legendFormat": "Campaigns/sec"
+          }
+        ],
+        "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 }
+      },
+      {
+        "id": 2,
+        "title": "Ad Views",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(ad_views_total[5m])",
+            "legendFormat": "Views/sec"
+          }
+        ],
+        "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 }
+      },
+      {
+        "id": 3,
+        "title": "Payment Success Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(payments_processed_total{status=\"success\"}[5m]) / rate(payments_processed_total[5m])",
+            "legendFormat": "Success Rate"
+          }
+        ],
+        "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 }
+      },
+      {
+        "id": 4,
+        "title": "Payment Volume (Birr)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(payment_amount_birr_sum[5m])",
+            "legendFormat": "{{type}}"
+          }
+        ],
+        "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 }
+      }
+    ],
+    "refresh": "30s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    }
+  }
+}

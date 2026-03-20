@@ -1,0 +1,182 @@
+---
+env:
+  contexts:
+    - name: "Modern PPC API"
+      urls:
+        - "http://localhost:5000/api/.*"
+      includePaths:
+        - "http://localhost:5000/api/.*"
+      excludePaths:
+        - "http://localhost:5000/api/health.*"
+        - "http://localhost:5000/api/metrics.*"
+      authentication:
+        method: "scriptBasedAuthentication"
+        parameters:
+          script: "auth-script.js"
+        verification:
+          method: "response"
+          pollUrl: "http://localhost:5000/api/auth/me"
+          pollData: ""
+          pollFrequency: 60
+          pollUnits: "requests"
+      sessionManagement:
+        method: "scriptBasedSessionManagement"
+        parameters:
+          script: "session-script.js"
+      users:
+        - name: "test-user"
+          credentials:
+            email: "test@example.com"
+            password: "password123"
+        - name: "admin-user"
+          credentials:
+            email: "admin@example.com"
+            password: "admin123"
+
+  parameters:
+    failOnError: true
+    failOnWarning: false
+    progressToStdout: true
+
+  vars:
+    baseUrl: "http://localhost:5000"
+
+jobs:
+  - type: "openapi"
+    parameters:
+      apiFile: "openapi.yaml"
+      apiUrl: "http://localhost:5000/api/docs"
+      targetUrl: "http://localhost:5000"
+      context: "Modern PPC API"
+
+  - type: "passiveScan-config"
+    parameters:
+      maxAlertsPerRule: 10
+      scanOnlyInScope: true
+      enableTags: true
+
+  - type: "spider"
+    parameters:
+      context: "Modern PPC API"
+      url: "http://localhost:5000/api"
+      maxDuration: 10
+      maxDepth: 5
+      maxChildren: 10
+      acceptCookies: true
+      handleODataParametersVisited: false
+      parseComments: true
+      parseGit: true
+      parseRobotsTxt: true
+      parseSVNEntries: true
+      parseSitemapXml: true
+      postForm: true
+      processForm: true
+      requestWaitTime: 200
+
+  - type: "spiderAjax"
+    parameters:
+      context: "Modern PPC API"
+      url: "http://localhost:5000"
+      maxDuration: 10
+      maxCrawlDepth: 5
+      numberOfBrowsers: 1
+      inScope: true
+      browserId: "firefox-headless"
+
+  - type: "passiveScan-wait"
+    parameters:
+      maxDuration: 10
+
+  - type: "activeScan"
+    parameters:
+      context: "Modern PPC API"
+      url: "http://localhost:5000/api"
+      maxRuleDurationInMins: 5
+      maxScanDurationInMins: 30
+      addQueryParam: false
+      defaultPolicy: "API-Minimal"
+      delayInMs: 0
+      handleAntiCSRFTokens: true
+      injectPluginIdInHeader: false
+      scanHeadersAllRequests: true
+      threadPerHost: 2
+
+  - type: "report"
+    parameters:
+      template: "traditional-html"
+      reportDir: "security-tests/reports"
+      reportFile: "zap-report"
+      reportTitle: "Modern PPC Security Scan Report"
+      reportDescription: "OWASP ZAP security scan results for Modern PPC application"
+      displayReport: false
+
+  - type: "report"
+    parameters:
+      template: "traditional-json"
+      reportDir: "security-tests/reports"
+      reportFile: "zap-report"
+      reportTitle: "Modern PPC Security Scan Report"
+      reportDescription: "OWASP ZAP security scan results for Modern PPC application"
+      displayReport: false
+
+alertFilters:
+  - ruleId: 10021  # X-Content-Type-Options Header Missing
+    newRisk: "Info"
+  - ruleId: 10020  # X-Frame-Options Header Not Set
+    newRisk: "Info"
+  - ruleId: 10096  # Timestamp Disclosure
+    newRisk: "Info"
+  - ruleId: 10109  # Modern Web Application
+    newRisk: "Info"
+
+scanPolicy:
+  name: "API-Minimal"
+  description: "Minimal scan policy for API testing"
+  threshold: "MEDIUM"
+  strength: "MEDIUM"
+  rules:
+    - id: 0  # Directory Browsing
+      threshold: "MEDIUM"
+      strength: "MEDIUM"
+    - id: 6  # Path Traversal
+      threshold: "MEDIUM"
+      strength: "MEDIUM"
+    - id: 7  # Remote File Inclusion
+      threshold: "MEDIUM"
+      strength: "MEDIUM"
+    - id: 40012  # Cross Site Scripting (Reflected)
+      threshold: "MEDIUM"
+      strength: "MEDIUM"
+    - id: 40014  # Cross Site Scripting (Persistent)
+      threshold: "MEDIUM"
+      strength: "MEDIUM"
+    - id: 40016  # Cross Site Scripting (Persistent - Prime)
+      threshold: "MEDIUM"
+      strength: "MEDIUM"
+    - id: 40017  # Cross Site Scripting (Persistent - Spider)
+      threshold: "MEDIUM"
+      strength: "MEDIUM"
+    - id: 40018  # SQL Injection
+      threshold: "MEDIUM"
+      strength: "MEDIUM"
+    - id: 90019  # Server Side Code Injection
+      threshold: "MEDIUM"
+      strength: "MEDIUM"
+    - id: 90020  # Remote OS Command Injection
+      threshold: "MEDIUM"
+      strength: "MEDIUM"
+    - id: 90021  # XPath Injection
+      threshold: "MEDIUM"
+      strength: "MEDIUM"
+    - id: 90022  # Application Error Disclosure
+      threshold: "MEDIUM"
+      strength: "MEDIUM"
+    - id: 90023  # XML External Entity Attack
+      threshold: "MEDIUM"
+      strength: "MEDIUM"
+    - id: 90024  # Generic Padding Oracle
+      threshold: "MEDIUM"
+      strength: "MEDIUM"
+    - id: 90025  # Expression Language Injection
+      threshold: "MEDIUM"
+      strength: "MEDIUM"

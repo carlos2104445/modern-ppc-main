@@ -1,0 +1,47 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: modern-ppc-pdb
+  namespace: modern-ppc
+  labels:
+    app: modern-ppc
+    component: backend
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: modern-ppc
+      component: backend
+  unhealthyPodEvictionPolicy: IfHealthyBudget
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: postgres-pdb
+  namespace: modern-ppc
+  labels:
+    app: postgres
+    component: database
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: postgres
+      component: database
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-pdb
+  namespace: modern-ppc
+  labels:
+    app: redis
+    component: cache
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: redis
+      component: cache
