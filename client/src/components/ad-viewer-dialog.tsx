@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Dialog,
   DialogContent,
@@ -8,20 +8,32 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { ExternalLink, Youtube, Image as ImageIcon, CheckCircle } from "lucide-react";
+import {
+  ExternalLink,
+  CheckCircle,
+  AlertTriangle,
+  Timer,
+  Eye,
+  Loader2,
+} from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth-context";
 
 interface AdViewerDialogProps {
   open: boolean;
   onOpenChange: (_open: boolean) => void;
   ad: {
     id: string;
-    title: string;
-    description: string;
-    payout: string;
-    duration: number;
-    advertiser: string;
+    title?: string;
+    name?: string;
+    description?: string;
+    payout?: string;
+    cpc?: string;
+    duration?: number;
+    advertiser?: string;
+    advertiserName?: string;
     type?: "link" | "youtube" | "banner";
+    url?: string;
     targetUrl?: string;
     videoUrl?: string;
     imageUrl?: string;
@@ -29,216 +41,298 @@ interface AdViewerDialogProps {
   userId?: string;
 }
 
+type ViewState = "idle" | "opening" | "viewing" | "verifying" | "complete" | "failed";
+
 export function AdViewerDialog({
   open,
   onOpenChange,
   ad,
-  userId = "demo-user",
+  userId,
 }: AdViewerDialogProps) {
   const { toast } = useToast();
-  const [timeRemaining, setTimeRemaining] = useState(ad.duration);
-  const [isComplete, setIsComplete] = useState(false);
-  const [trackingToken, setTrackingToken] = useState<string | null>(null);
-  const [trackedUrl, setTrackedUrl] = useState<string | null>(null);
+  const { refreshProfile } = useAuth();
+  const [viewState, setViewState] = useState<ViewState>("idle");
+  const [timeRemaining, setTimeRemaining] = useState(0);
+  const [popupClosed, setPopupClosed] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const popupRef = useRef<Window | null>(null);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const popupCheckRef = useRef<NodeJS.Timeout | null>(null);
 
+  const duration = ad.duration || 15;
+  const payout = ad.payout || (ad.cpc ? `ETB ${parseFloat(ad.cpc).toFixed(2)}` : "ETB 0.05");
+  const adTitle = ad.title || ad.name || "Ad";
+  const advertiser = ad.advertiser || ad.advertiserName || "Advertiser";
+
+  // Get the URL the ad should open
+  const getAdUrl = useCallback(() => {
+    if (ad.type === "youtube" && ad.videoUrl) return ad.videoUrl;
+    if (ad.url) return ad.url;
+    if (ad.targetUrl) return ad.targetUrl;
+    if (ad.imageUrl) return ad.imageUrl;
+    return null;
+  }, [ad]);
+
+  // Reset state when dialog closes
   useEffect(() => {
     if (!open) {
-      setTimeRemaining(ad.duration);
-      setIsComplete(false);
-      setTrackingToken(null);
-      setTrackedUrl(null);
+      setViewState("idle");
+      setTimeRemaining(0);
+      setPopupClosed(false);
+      setSessionId(null);
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (popupCheckRef.current) clearInterval(popupCheckRef.current);
+      if (popupRef.current && !popupRef.current.closed) {
+        popupRef.current.close();
+      }
+      popupRef.current = null;
+    }
+  }, [open]);
+
+  // Start viewing — opens popup and begins countdown
+  const handleStartViewing = async () => {
+    setViewState("opening");
+
+    // 1. Register the ad view session on the server
+    try {
+      const res = await fetch("/api/v1/ad-views/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          campaignId: ad.id,
+          duration,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        toast({ title: "Error", description: err.error || "Failed to start ad view", variant: "destructive" });
+        setViewState("idle");
+        return;
+      }
+
+      const data = await res.json();
+      setSessionId(data.sessionId);
+    } catch {
+      toast({ title: "Error", description: "Network error. Try again.", variant: "destructive" });
+      setViewState("idle");
       return;
     }
 
-    const startTracking = async () => {
-      try {
-        const response = await fetch("/api/ad-views/start", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-user-id": userId,
-          },
-          body: JSON.stringify({
-            userId,
-            campaignId: ad.id,
-          }),
+    // 2. Open the ad in a new window
+    const adUrl = getAdUrl();
+    if (adUrl) {
+      const popup = window.open(
+        adUrl,
+        "_blank",
+        "width=900,height=650,scrollbars=yes,resizable=yes,toolbar=no,menubar=no,location=yes"
+      );
+      popupRef.current = popup;
+
+      if (!popup) {
+        toast({
+          title: "Popup blocked",
+          description: "Please allow popups for this site to view ads.",
+          variant: "destructive",
         });
-
-        if (response.ok) {
-          const data = await response.json();
-          setTrackingToken(data.trackingToken);
-          setTrackedUrl(`/api/track/${data.trackingToken}`);
-        }
-      } catch (error) {
-        console.error("Failed to start tracking:", error);
+        setViewState("idle");
+        return;
       }
-    };
+    }
 
-    startTracking();
+    // 3. Start the countdown
+    setTimeRemaining(duration);
+    setPopupClosed(false);
+    setViewState("viewing");
 
-    const timer = setInterval(() => {
+    timerRef.current = setInterval(() => {
       setTimeRemaining((prev) => {
         if (prev <= 1) {
-          setIsComplete(true);
-          clearInterval(timer);
-          if (trackingToken) {
-            fetch(`/api/ad-views/${trackingToken}/complete`, {
-              method: "POST",
-            }).catch(console.error);
-          }
+          if (timerRef.current) clearInterval(timerRef.current);
           return 0;
         }
         return prev - 1;
       });
     }, 1000);
 
-    return () => clearInterval(timer);
-  }, [open, ad.duration, ad.id, userId, trackingToken]);
+    // 4. Poll to check if popup is still open
+    popupCheckRef.current = setInterval(() => {
+      if (popupRef.current && popupRef.current.closed) {
+        setPopupClosed(true);
+        if (popupCheckRef.current) clearInterval(popupCheckRef.current);
+      }
+    }, 500);
+  };
 
-  const handleClaim = async () => {
-    if (!trackingToken) {
-      toast({
-        title: "Error",
-        description: "Tracking token not found. Please try again.",
-        variant: "destructive",
-      });
-      return;
+  // When timer hits 0, transition to complete state
+  useEffect(() => {
+    if (viewState === "viewing" && timeRemaining === 0) {
+      setViewState("complete");
+      if (popupCheckRef.current) clearInterval(popupCheckRef.current);
     }
+  }, [viewState, timeRemaining]);
+
+  // Claim the reward
+  const handleClaimReward = async () => {
+    if (!sessionId) return;
+    setViewState("verifying");
 
     try {
-      const response = await fetch(`/api/ad-views/${trackingToken}/claim`, {
+      const res = await fetch("/api/v1/ad-views/claim", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          rewardAmount: ad.payout.replace(/[^0-9.]/g, ""),
-        }),
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ sessionId }),
       });
 
-      if (response.ok) {
+      if (res.ok) {
+        const data = await res.json();
         toast({
-          title: "Reward claimed!",
-          description: `You earned ${ad.payout} for viewing this ad.`,
+          title: "Reward earned! 🎉",
+          description: `You earned ${payout} for viewing "${adTitle}"`,
         });
+        await refreshProfile();
         onOpenChange(false);
       } else {
-        const error = await response.json();
+        const err = await res.json();
+        setViewState("failed");
         toast({
-          title: "Error",
-          description: error.error || "Failed to claim reward",
+          title: "Claim failed",
+          description: err.error || "Could not verify your ad view. Try again.",
           variant: "destructive",
         });
       }
-    } catch (error) {
-      console.error("Failed to claim reward:", error);
+    } catch {
+      setViewState("failed");
       toast({
-        title: "Error",
-        description: "Failed to claim reward. Please try again.",
+        title: "Network error",
+        description: "Failed to claim reward. Try again.",
         variant: "destructive",
       });
     }
   };
 
-  const getYoutubeEmbedUrl = (url: string) => {
-    const videoId = url?.match(
-      /(?:youtube\.com\/(?:[^/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?/\s]{11})/
-    )?.[1];
-    return videoId ? `https://www.youtube.com/embed/${videoId}` : "";
-  };
-
-  const adType = ad.type || "link";
-  const progress = ((ad.duration - timeRemaining) / ad.duration) * 100;
+  const progress = duration > 0 ? ((duration - timeRemaining) / duration) * 100 : 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            {adType === "link" && <ExternalLink className="h-5 w-5" />}
-            {adType === "youtube" && <Youtube className="h-5 w-5" />}
-            {adType === "banner" && <ImageIcon className="h-5 w-5" />}
-            {ad.title}
+            <Eye className="h-5 w-5" />
+            {adTitle}
           </DialogTitle>
           <DialogDescription>
-            By {ad.advertiser} • Earn {ad.payout}
+            By {advertiser} • Earn {payout}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-6">
-          {/* Ad Content */}
-          <div className="min-h-[300px] flex items-center justify-center bg-muted/30 rounded-lg p-6">
-            {adType === "link" && (
-              <div className="text-center space-y-4">
-                <ExternalLink className="h-20 w-20 mx-auto text-primary" />
-                <h3 className="text-xl font-semibold">{ad.title}</h3>
-                <p className="text-muted-foreground max-w-md">{ad.description}</p>
-                {trackedUrl && (
-                  <a
-                    href={trackedUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-2 text-primary hover:underline"
-                  >
-                    Visit Website <ExternalLink className="h-4 w-4" />
-                  </a>
-                )}
+          {/* Idle state — prompt to start */}
+          {viewState === "idle" && (
+            <div className="text-center space-y-4 py-4">
+              <div className="bg-muted/50 rounded-xl p-6">
+                <Timer className="h-12 w-12 mx-auto text-primary mb-3" />
+                <h3 className="font-semibold text-lg">Ready to view this ad?</h3>
+                <p className="text-sm text-muted-foreground mt-2">
+                  The ad will open in a <strong>new window</strong>. Keep it open for{" "}
+                  <strong>{duration} seconds</strong> while the timer counts down here.
+                </p>
               </div>
-            )}
-
-            {adType === "youtube" && ad.videoUrl && getYoutubeEmbedUrl(ad.videoUrl) && (
-              <div className="w-full">
-                <iframe
-                  width="100%"
-                  height="350"
-                  src={getYoutubeEmbedUrl(ad.videoUrl)}
-                  title={ad.title}
-                  frameBorder="0"
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                  allowFullScreen
-                  className="rounded-lg"
-                />
-              </div>
-            )}
-
-            {adType === "banner" && ad.imageUrl && (
-              <div className="w-full">
-                <img
-                  src={ad.imageUrl}
-                  alt={ad.title}
-                  className="w-full h-auto rounded-lg max-h-[400px] object-contain"
-                />
-              </div>
-            )}
-          </div>
-
-          {/* Timer Progress */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">
-                {isComplete ? "Ad viewing complete!" : `Please wait ${timeRemaining} seconds...`}
-              </span>
-              <span className="font-mono font-semibold">{timeRemaining}s</span>
+              <Button
+                className="w-full h-12 text-base"
+                onClick={handleStartViewing}
+                data-testid="button-start-ad-view"
+              >
+                <ExternalLink className="h-5 w-5 mr-2" />
+                Open Ad & Start Timer
+              </Button>
             </div>
-            <Progress value={progress} className="h-2" />
-          </div>
+          )}
 
-          {/* Action Button */}
-          <Button
-            className="w-full"
-            onClick={handleClaim}
-            disabled={!isComplete}
-            data-testid="button-claim-reward"
-          >
-            {isComplete ? (
-              <>
-                <CheckCircle className="h-4 w-4 mr-2" />
-                Claim {ad.payout}
-              </>
-            ) : (
-              `Claim ${ad.payout} (${timeRemaining}s)`
-            )}
-          </Button>
+          {/* Opening state */}
+          {viewState === "opening" && (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </div>
+          )}
+
+          {/* Viewing state — timer counting down */}
+          {viewState === "viewing" && (
+            <div className="space-y-4">
+              <div className="bg-muted/30 rounded-xl p-6 text-center">
+                <div className="text-5xl font-mono font-bold text-primary mb-2">
+                  {timeRemaining}
+                </div>
+                <p className="text-sm text-muted-foreground">seconds remaining</p>
+              </div>
+
+              <Progress value={progress} className="h-3" />
+
+              {popupClosed && timeRemaining > 0 && (
+                <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                  <span>
+                    The ad window was closed early. Timer is still running, but you must view the full duration.
+                  </span>
+                </div>
+              )}
+
+              <p className="text-xs text-center text-muted-foreground">
+                Keep the ad window open until the timer reaches zero
+              </p>
+            </div>
+          )}
+
+          {/* Complete state — ready to claim */}
+          {viewState === "complete" && (
+            <div className="space-y-4">
+              <div className="bg-chart-2/10 rounded-xl p-6 text-center">
+                <CheckCircle className="h-12 w-12 mx-auto text-chart-2 mb-2" />
+                <h3 className="font-semibold text-lg text-chart-2">Ad View Complete!</h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Claim your reward of <strong>{payout}</strong>
+                </p>
+              </div>
+              <Button
+                className="w-full h-12 text-base"
+                onClick={handleClaimReward}
+                data-testid="button-claim-reward"
+              >
+                <CheckCircle className="h-5 w-5 mr-2" />
+                Claim {payout}
+              </Button>
+            </div>
+          )}
+
+          {/* Verifying state */}
+          {viewState === "verifying" && (
+            <div className="flex flex-col items-center justify-center py-8 gap-3">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              <p className="text-sm text-muted-foreground">Verifying your ad view...</p>
+            </div>
+          )}
+
+          {/* Failed state */}
+          {viewState === "failed" && (
+            <div className="space-y-4">
+              <div className="bg-destructive/10 rounded-xl p-6 text-center">
+                <AlertTriangle className="h-12 w-12 mx-auto text-destructive mb-2" />
+                <h3 className="font-semibold text-lg">Verification Failed</h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Could not verify your ad view. Please try again.
+                </p>
+              </div>
+              <Button
+                className="w-full"
+                variant="outline"
+                onClick={() => setViewState("idle")}
+              >
+                Try Again
+              </Button>
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>

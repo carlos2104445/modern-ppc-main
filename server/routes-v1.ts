@@ -1,5 +1,9 @@
 import type { Express } from "express";
 import { pgStorage as storage } from "./pg-storage";
+import { db } from "./db";
+import { users, transactions as txns } from "@shared/schema";
+import { sql, eq } from "drizzle-orm";
+import { cache } from "./redis";
 import {
   insertBlogPostSchema,
   insertAdminCampaignSchema,
@@ -435,6 +439,171 @@ export function registerV1Routes(app: Express): void {
       res.json(availableAds);
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to fetch ads" });
+    }
+  });
+
+  // ==========================================
+  // Ad View routes — server-side verification
+  // ==========================================
+
+  // In-memory session store (replace with Redis in production)
+  const adViewSessions = new Map<string, {
+    userId: string;
+    campaignId: string;
+    startedAt: number;
+    requiredDuration: number;
+    claimed: boolean;
+  }>();
+
+  // Clean up expired sessions every 5 minutes
+  setInterval(() => {
+    const now = Date.now();
+    for (const [id, session] of Array.from(adViewSessions)) {
+      if (now - session.startedAt > 10 * 60 * 1000) {
+        adViewSessions.delete(id);
+      }
+    }
+  }, 5 * 60 * 1000);
+
+  // Start an ad view session
+  app.post(`${API_PREFIX}/ad-views/start`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid token" });
+
+      const { campaignId, duration } = req.body;
+      if (!campaignId || !duration) {
+        return res.status(400).json({ error: "campaignId and duration are required" });
+      }
+
+      // Verify the campaign exists and is active
+      const { campaignService } = await import("./campaign-service");
+      const campaign = await campaignService.getCampaign(campaignId);
+      if (!campaign || campaign.status !== "active") {
+        return res.status(400).json({ error: "Campaign not available" });
+      }
+
+      // Don't let users view their own campaigns
+      if (campaign.userId === decoded.userId) {
+        return res.status(400).json({ error: "Cannot view your own campaign" });
+      }
+
+      // Check for existing active sessions for this user+campaign (prevent spam)
+      for (const [, session] of Array.from(adViewSessions)) {
+        if (session.userId === decoded.userId && session.campaignId === campaignId && !session.claimed) {
+          const elapsed = (Date.now() - session.startedAt) / 1000;
+          if (elapsed < session.requiredDuration + 60) {
+            return res.status(429).json({ error: "You already have an active session for this ad" });
+          }
+        }
+      }
+
+      // Create session
+      const sessionId = crypto.randomUUID();
+      adViewSessions.set(sessionId, {
+        userId: decoded.userId,
+        campaignId,
+        startedAt: Date.now(),
+        requiredDuration: Math.max(duration, 10), // Minimum 10 seconds
+        claimed: false,
+      });
+
+      res.json({ sessionId, duration: Math.max(duration, 10) });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to start ad view" });
+    }
+  });
+
+  // Claim reward after viewing
+  app.post(`${API_PREFIX}/ad-views/claim`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid token" });
+
+      const { sessionId } = req.body;
+      if (!sessionId) return res.status(400).json({ error: "sessionId is required" });
+
+      const session = adViewSessions.get(sessionId);
+      if (!session) return res.status(404).json({ error: "Session not found or expired" });
+
+      // Verify ownership
+      if (session.userId !== decoded.userId) {
+        return res.status(403).json({ error: "This session does not belong to you" });
+      }
+
+      // Verify not already claimed
+      if (session.claimed) {
+        return res.status(400).json({ error: "Reward already claimed" });
+      }
+
+      // Verify minimum time has elapsed (allow 2s tolerance)
+      const elapsedSeconds = (Date.now() - session.startedAt) / 1000;
+      if (elapsedSeconds < session.requiredDuration - 2) {
+        return res.status(400).json({
+          error: `Must view for at least ${session.requiredDuration} seconds. Only ${Math.floor(elapsedSeconds)}s elapsed.`,
+        });
+      }
+
+      // Session expired (10 min window)
+      if (elapsedSeconds > 600) {
+        adViewSessions.delete(sessionId);
+        return res.status(400).json({ error: "Session expired. Please start a new view." });
+      }
+
+      // Mark as claimed before processing
+      session.claimed = true;
+
+      // Record the click/view — deducts CPC from campaign escrow
+      const { campaignService } = await import("./campaign-service");
+      const campaign = await campaignService.getCampaign(session.campaignId);
+      if (!campaign) {
+        session.claimed = false;
+        return res.status(400).json({ error: "Campaign no longer exists" });
+      }
+
+      const cpcAmount = parseFloat(campaign.cpc || "0");
+      if (cpcAmount <= 0) {
+        session.claimed = false;
+        return res.status(400).json({ error: "Invalid campaign CPC" });
+      }
+
+      try {
+        await campaignService.recordClick(session.campaignId, cpcAmount);
+      } catch (err: any) {
+        session.claimed = false;
+        return res.status(400).json({ error: err.message || "Failed to record ad view" });
+      }
+
+      // Credit the viewer's balance
+      await db
+        .update(users)
+        .set({ balance: sql`CAST(${users.balance} AS numeric) + ${cpcAmount}` })
+        .where(eq(users.id, decoded.userId));
+
+      // Log the earning for the viewer
+      await db.insert(txns).values({
+        userId: decoded.userId,
+        type: "click_earning",
+        amount: cpcAmount.toFixed(2),
+        description: `Earned from viewing ad "${campaign.name}"`,
+        status: "completed",
+      });
+
+      // Invalidate cache
+      await cache.del(`user:${decoded.userId}`);
+
+      // Clean up session
+      adViewSessions.delete(sessionId);
+
+      res.json({ success: true, message: "Reward claimed successfully" });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to claim reward" });
     }
   });
 
