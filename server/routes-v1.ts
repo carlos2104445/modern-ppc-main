@@ -625,6 +625,11 @@ export function registerV1Routes(app: Express): void {
         `ad view "${campaign.name}"`
       ).catch((err) => console.error("Commission distribution error:", err));
 
+      // Gamification: XP, streak, achievements
+      const { gamificationService } = await import("./gamification-service");
+      gamificationService.onAdViewCompleted(decoded.userId)
+        .catch((err) => console.error("Gamification error:", err));
+
       // Clean up session
       adViewSessions.delete(sessionId);
 
@@ -1806,6 +1811,93 @@ export function registerV1Routes(app: Express): void {
       res.json(ranked);
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to fetch leaderboard" });
+    }
+  });
+
+  // ==========================================
+  // Gamification API
+  // ==========================================
+
+  // Get user gamification state (XP, level, streak, all levels)
+  app.get(`${API_PREFIX}/user/gamification`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid token" });
+
+      const user = await storage.getUser(decoded.userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      const { LEVELS } = await import("./gamification-service");
+
+      res.json({
+        xp: user.xp,
+        level: user.level,
+        currentStreak: user.currentStreak,
+        longestStreak: user.longestStreak,
+        streakFreezes: user.streakFreezes,
+        levels: LEVELS,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch gamification data" });
+    }
+  });
+
+  // Get user achievements with real progress
+  app.get(`${API_PREFIX}/user/achievements`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid token" });
+
+      const { gamificationService } = await import("./gamification-service");
+      const { achievements, newlyUnlocked } = await gamificationService.getAchievements(decoded.userId);
+
+      res.json({ achievements, newlyUnlocked });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch achievements" });
+    }
+  });
+
+  // Get daily/weekly challenges with real progress
+  app.get(`${API_PREFIX}/user/challenges`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid token" });
+
+      const { gamificationService } = await import("./gamification-service");
+      const challenges = await gamificationService.getChallenges(decoded.userId);
+
+      res.json(challenges);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch challenges" });
+    }
+  });
+
+  // Claim a challenge reward
+  app.post(`${API_PREFIX}/user/challenges/:id/claim`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid token" });
+
+      const { gamificationService } = await import("./gamification-service");
+      const result = await gamificationService.claimChallengeReward(decoded.userId, req.params.id);
+
+      if (!result.success) return res.status(400).json({ error: result.message });
+
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to claim reward" });
     }
   });
 
