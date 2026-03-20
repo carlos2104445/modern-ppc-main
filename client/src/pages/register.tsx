@@ -74,14 +74,19 @@ export default function Register() {
 
       setUsernameChecking(true);
 
-      // Simulate API call - in production, this would check backend
-      setTimeout(() => {
-        // Mock: usernames starting with 'admin' or 'test' are taken
-        const taken =
-          username.toLowerCase().startsWith("admin") || username.toLowerCase().startsWith("test");
-        setUsernameAvailable(!taken);
+      try {
+        const res = await fetch(`/api/v1/auth/check-username/${encodeURIComponent(username)}`);
+        if (res.ok) {
+          const data = await res.json();
+          setUsernameAvailable(data.available);
+        } else {
+          setUsernameAvailable(null);
+        }
+      } catch {
+        setUsernameAvailable(null);
+      } finally {
         setUsernameChecking(false);
-      }, 500);
+      }
     };
 
     const debounce = setTimeout(checkUsername, 300);

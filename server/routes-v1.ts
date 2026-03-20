@@ -186,6 +186,20 @@ export function registerV1Routes(app: Express): void {
     }
   });
 
+  // Username availability check
+  app.get(`${API_PREFIX}/auth/check-username/:username`, async (req, res) => {
+    try {
+      const { username } = req.params;
+      if (!username || username.length < 3) {
+        return res.json({ available: false, reason: "Username must be at least 3 characters" });
+      }
+      const existing = await storage.getUserByUsername(username);
+      res.json({ available: !existing });
+    } catch (error: any) {
+      res.status(500).json({ available: false, error: error.message });
+    }
+  });
+
   app.post(`${API_PREFIX}/auth/signin`, async (req, res) => {
     try {
       const { email, password } = req.body;
@@ -1105,6 +1119,21 @@ export function registerV1Routes(app: Express): void {
       res.json({ campaign, message: "Campaign rejected. Escrow has been refunded to the user." });
     } catch (error: any) {
       res.status(400).json({ error: error.message || "Failed to reject campaign" });
+    }
+  });
+
+  // Admin: gamification configuration (read-only, serves level/achievement/challenge definitions)
+  app.get(`${API_PREFIX}/admin/gamification`, async (req, res) => {
+    try {
+      const { ACHIEVEMENTS, LEVELS, DAILY_CHALLENGES, WEEKLY_CHALLENGES } = await import("./gamification-service");
+
+      res.json({
+        achievements: ACHIEVEMENTS,
+        levels: LEVELS,
+        challenges: [...DAILY_CHALLENGES, ...WEEKLY_CHALLENGES],
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch gamification data" });
     }
   });
 
