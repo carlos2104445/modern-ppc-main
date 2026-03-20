@@ -113,6 +113,18 @@ export class PostgreSQLStorage implements IStorage {
     return user;
   }
 
+  async updateUser(id: string, updates: Partial<any>): Promise<any | undefined> {
+    const [user] = await db
+      .update(users)
+      .set(updates)
+      .where(eq(users.id, id))
+      .returning();
+    if (user) {
+      await cache.del(`user:${id}`);
+    }
+    return user;
+  }
+
   async updateUserPassword(userId: string, password: string): Promise<void> {
     const hashedPassword = await bcrypt.hash(password, 10);
     await db.update(users).set({ password: hashedPassword }).where(eq(users.id, userId));

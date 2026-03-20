@@ -21,6 +21,7 @@ import { logAdminAction } from "./audit-logger";
 import bcrypt from "bcrypt";
 import { pool } from "./db";
 import redis from "./redis";
+import { jwtService } from "./jwt";
 
 export function registerV1Routes(app: Express): void {
   const API_PREFIX = "/api/v1";
@@ -121,20 +122,42 @@ export function registerV1Routes(app: Express): void {
         return res.status(400).json({ message: "Email already registered" });
       }
 
-      const hashedPassword = await bcrypt.hash(password, 10);
+      const existingUsername = await storage.getUserByUsername(username);
+      if (existingUsername) {
+        return res.status(400).json({ message: "Username already taken" });
+      }
+
       const fullName = `${firstName} ${lastName}`;
 
+      // Don't hash here — pgStorage.createUser() handles hashing
       const newUser = await storage.createUser({
         fullName,
         email,
         username,
         phoneNumber,
         dateOfBirth: dateOfBirth || undefined,
-        password: hashedPassword,
+        password,
+      });
+
+      // Generate JWT tokens for auto-login after registration
+      const { accessToken, refreshToken } = jwtService.generateTokenPair(newUser);
+
+      res.cookie("accessToken", accessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: 15 * 60 * 1000,
+      });
+
+      res.cookie("refreshToken", refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: 7 * 24 * 60 * 60 * 1000,
       });
 
       const { password: _, ...userWithoutPassword } = newUser;
-      res.status(201).json({ user: userWithoutPassword });
+      res.status(201).json({ user: userWithoutPassword, accessToken, refreshToken });
     } catch (error: any) {
       res.status(400).json({ message: error.message || "Registration failed" });
     }
@@ -158,8 +181,25 @@ export function registerV1Routes(app: Express): void {
         return res.status(403).json({ message: "Please use the admin login page" });
       }
 
+      // Generate JWT tokens
+      const { accessToken, refreshToken } = jwtService.generateTokenPair(user);
+
+      res.cookie("accessToken", accessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: 15 * 60 * 1000,
+      });
+
+      res.cookie("refreshToken", refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      });
+
       const { password: _, ...userWithoutPassword } = user;
-      res.json({ user: userWithoutPassword });
+      res.json({ user: userWithoutPassword, accessToken, refreshToken });
     } catch (error: any) {
       res.status(400).json({ message: error.message || "Sign in failed" });
     }

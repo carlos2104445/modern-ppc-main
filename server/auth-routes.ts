@@ -1,5 +1,5 @@
 import type { Express, Request, Response } from "express";
-import { storage } from "./storage";
+import { pgStorage as storage } from "./pg-storage";
 import { jwtService } from "./jwt";
 import { asyncHandler } from "./error-handler";
 import { AuthErrors } from "./errors";

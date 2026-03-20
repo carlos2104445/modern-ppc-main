@@ -55,6 +55,7 @@ export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
+  updateUser(id: string, updates: Partial<User>): Promise<User | undefined>;
 
   // Blog posts
   getAllBlogPosts(): Promise<BlogPost[]>;
@@ -536,6 +537,14 @@ export class MemStorage implements IStorage {
     };
     this.users.set(id, user);
     return user;
+  }
+
+  async updateUser(id: string, updates: Partial<User>): Promise<User | undefined> {
+    const existing = this.users.get(id);
+    if (!existing) return undefined;
+    const updated: User = { ...existing, ...updates };
+    this.users.set(id, updated);
+    return updated;
   }
 
   async getAllBlogPosts(): Promise<BlogPost[]> {
@@ -1674,4 +1683,8 @@ export class MemStorage implements IStorage {
   }
 }
 
-export const storage = new MemStorage();
+export const memStorage = new MemStorage();
+
+// Use PostgreSQL storage for all routes
+import { pgStorage } from "./pg-storage";
+export const storage = pgStorage;
