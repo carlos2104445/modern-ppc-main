@@ -120,7 +120,7 @@ export function registerV1Routes(app: Express): void {
   // Authentication routes
   app.post(`${API_PREFIX}/auth/register`, async (req, res) => {
     try {
-      const { firstName, lastName, email, username, phoneNumber, dateOfBirth, password } = req.body;
+      const { firstName, lastName, email, username, phoneNumber, dateOfBirth, password, referralCode: refCode } = req.body;
 
       const existingUser = await storage.getUserByEmail(email);
       if (existingUser) {
@@ -130,6 +130,16 @@ export function registerV1Routes(app: Express): void {
       const existingUsername = await storage.getUserByUsername(username);
       if (existingUsername) {
         return res.status(400).json({ message: "Username already taken" });
+      }
+
+      // Resolve referral code to referrer's user ID
+      const { referralService } = await import("./referral-service");
+      let referredBy: string | undefined;
+      if (refCode) {
+        const referrerId = await referralService.resolveReferralCode(refCode);
+        if (referrerId) {
+          referredBy = referrerId;
+        }
       }
 
       const fullName = `${firstName} ${lastName}`;
@@ -142,7 +152,15 @@ export function registerV1Routes(app: Express): void {
         phoneNumber,
         dateOfBirth: dateOfBirth || undefined,
         password,
+        referredBy,
       });
+
+      // Credit signup bonus to referrer (ETB 5)
+      if (referredBy) {
+        referralService.creditSignupBonus(referredBy, fullName).catch((err) =>
+          console.error("Failed to credit signup bonus:", err)
+        );
+      }
 
       // Generate JWT tokens for auto-login after registration
       const { accessToken, refreshToken } = jwtService.generateTokenPair(newUser);
@@ -598,6 +616,14 @@ export function registerV1Routes(app: Express): void {
 
       // Invalidate cache
       await cache.del(`user:${decoded.userId}`);
+
+      // Distribute referral commissions up to 5 levels
+      const { referralService } = await import("./referral-service");
+      referralService.distributeCommissions(
+        decoded.userId,
+        cpcAmount,
+        `ad view "${campaign.name}"`
+      ).catch((err) => console.error("Commission distribution error:", err));
 
       // Clean up session
       adViewSessions.delete(sessionId);
@@ -1798,40 +1824,47 @@ export function registerV1Routes(app: Express): void {
       const user = await storage.getUser(decoded.userId);
       if (!user) return res.status(404).json({ error: "User not found" });
 
-      // Get direct referrals (users who used this user's referral code)
-      const directReferrals = await db
-        .select({
-          id: users.id,
-          name: sql`CONCAT(${users.firstName}, ' ', ${users.lastName})`,
-          joinedAt: users.createdAt,
-          earnings: users.lifetimeEarnings,
-        })
-        .from(users)
-        .where(eq(users.referredBy, decoded.userId))
-        .orderBy(sql`${users.createdAt} DESC`);
+      const { referralService } = await import("./referral-service");
 
-      // Calculate referral commission earnings
-      const commissionTransactions = await db
+      // Get multi-level referral tree (3 levels deep)
+      const tree = await referralService.getReferralTree(decoded.userId, 3);
+
+      // Get commission history
+      const commissions = await referralService.getCommissionHistory(decoded.userId, 20);
+
+      // Calculate totals
+      const commissionTotal = await db
         .select({
           total: sql`COALESCE(SUM(CAST(amount AS numeric)), 0)`,
         })
         .from(txns)
         .where(and(
           eq(txns.userId, decoded.userId),
-          sql`${txns.type} = 'referral_commission'`
+          sql`(${txns.type} = 'referral_commission' OR ${txns.type} = 'referral_bonus')`
         ));
 
-      const totalCommission = parseFloat(commissionTransactions[0]?.total as string) || 0;
+      const totalCommission = parseFloat(commissionTotal[0]?.total as string) || 0;
+
+      // Count total referrals across all levels
+      const countAll = (nodes: any[]): number =>
+        nodes.reduce((sum: number, n: any) => sum + 1 + countAll(n.children || []), 0);
+
+      // Get commission levels config
+      const levels = await referralService.getCommissionLevels();
 
       res.json({
         referralCode: user.referralCode,
-        totalReferrals: directReferrals.length,
+        totalReferrals: countAll(tree),
+        directReferrals: tree.length,
         totalCommission: totalCommission.toFixed(2),
-        referrals: directReferrals.map((r: any) => ({
-          id: r.id,
-          name: r.name,
-          joinedAt: r.joinedAt,
-          earnings: r.earnings,
+        commissionLevels: levels,
+        tree,
+        recentCommissions: commissions.map((c: any) => ({
+          id: c.id,
+          amount: c.amount,
+          description: c.description,
+          type: c.type,
+          createdAt: c.createdAt,
         })),
       });
     } catch (error: any) {

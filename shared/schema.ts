@@ -487,6 +487,7 @@ export const insertUserSchema = createInsertSchema(users).pick({
   fullName: true,
   phoneNumber: true,
   dateOfBirth: true,
+  referredBy: true,
 });
 
 export const insertCampaignSchema = createInsertSchema(campaigns).pick({
