@@ -1,60 +1,115 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { useLocation } from "wouter";
 import { CampaignCard } from "@/components/campaign-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Plus, TrendingUp, DollarSign, MousePointerClick, Search } from "lucide-react";
+import { Plus, TrendingUp, DollarSign, MousePointerClick, Search, Loader2 } from "lucide-react";
 import { CreateCampaignDialog } from "@/components/create-campaign-dialog";
 import { CampaignDetailsDialog } from "@/components/campaign-details-dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useToast } from "@/hooks/use-toast";
 
 export default function Campaigns() {
   const [, setLocation] = useLocation();
+  const { toast } = useToast();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
   const [selectedCampaign, setSelectedCampaign] = useState<any>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "paused" | "completed">(
-    "all"
-  );
-  const [campaigns, setCampaigns] = useState([
-    {
-      id: "1",
-      name: "Summer Sale Campaign",
-      type: "link" as const,
-      budget: "ETB 500.00",
-      spent: "ETB 287.50",
-      clicks: 1250,
-      status: "active" as const,
-    },
-    {
-      id: "2",
-      name: "Product Launch 2024",
-      type: "youtube" as const,
-      budget: "ETB 1000.00",
-      spent: "ETB 450.00",
-      clicks: 890,
-      status: "paused" as const,
-    },
-    {
-      id: "3",
-      name: "Brand Awareness",
-      type: "banner" as const,
-      budget: "ETB 750.00",
-      spent: "ETB 750.00",
-      clicks: 3200,
-      status: "completed" as const,
-    },
-  ]);
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [campaigns, setCampaigns] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchCampaigns = useCallback(async () => {
+    try {
+      const response = await fetch("/api/v1/campaigns", {
+        credentials: "include",
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setCampaigns(data);
+      }
+    } catch (error) {
+      console.error("Failed to fetch campaigns:", error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchCampaigns();
+  }, [fetchCampaigns]);
+
+  // Refresh campaigns when the create dialog closes (new campaign may have been created)
+  const handleCreateDialogChange = (open: boolean) => {
+    setCreateDialogOpen(open);
+    if (!open) {
+      fetchCampaigns();
+    }
+  };
 
   const handleViewDetails = (campaign: any) => {
     setSelectedCampaign(campaign);
     setDetailsDialogOpen(true);
   };
 
-  const handleDeleteCampaign = (id: string) => {
-    setCampaigns((prev) => prev.filter((c) => c.id !== id));
+  const handleCancelCampaign = async (id: string) => {
+    try {
+      const response = await fetch(`/api/v1/campaigns/${id}/cancel`, {
+        method: "PATCH",
+        credentials: "include",
+      });
+      const data = await response.json();
+      if (response.ok) {
+        toast({
+          title: "Campaign cancelled",
+          description: data.message || "Unspent escrow has been refunded to your balance.",
+        });
+        fetchCampaigns();
+      } else {
+        toast({
+          title: "Error",
+          description: data.error || "Failed to cancel campaign",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to cancel campaign",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleDeleteCampaign = async (id: string) => {
+    try {
+      const response = await fetch(`/api/v1/campaigns/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      const data = await response.json();
+      if (response.ok) {
+        toast({
+          title: "Campaign deleted",
+          description: data.message || "Campaign has been deleted.",
+        });
+        fetchCampaigns();
+      } else {
+        toast({
+          title: "Error",
+          description: data.error || "Failed to delete campaign",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to delete campaign",
+        variant: "destructive",
+      });
+    }
   };
 
   const filteredCampaigns = useMemo(() => {
@@ -65,23 +120,15 @@ export default function Campaigns() {
     });
   }, [campaigns, searchQuery, statusFilter]);
 
-  const stats = [
-    {
-      title: "Total Campaigns",
-      value: campaigns.length.toString(),
-      icon: TrendingUp,
-    },
-    {
-      title: "Total Spent",
-      value: "ETB 1,487.50",
-      icon: DollarSign,
-    },
-    {
-      title: "Total Clicks",
-      value: "5,340",
-      icon: MousePointerClick,
-    },
-  ];
+  const totalSpent = useMemo(() => {
+    return campaigns.reduce((sum, c) => sum + parseFloat(c.spent || "0"), 0).toFixed(2);
+  }, [campaigns]);
+
+  const totalInEscrow = useMemo(() => {
+    return campaigns
+      .reduce((sum, c) => sum + (parseFloat(c.escrowAmount || "0") - parseFloat(c.spent || "0") - parseFloat(c.refundedAmount || "0")), 0)
+      .toFixed(2);
+  }, [campaigns]);
 
   return (
     <div className="space-y-6">
@@ -124,22 +171,22 @@ export default function Campaigns() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold" data-testid="text-stat-total-spent">
-              ETB 1,487.50
+              ETB {totalSpent}
             </div>
           </CardContent>
         </Card>
         <Card
           className="hover-elevate cursor-pointer"
           onClick={() => setStatusFilter("active")}
-          data-testid="card-stat-total-clicks"
+          data-testid="card-stat-in-escrow"
         >
           <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Clicks</CardTitle>
+            <CardTitle className="text-sm font-medium">In Escrow</CardTitle>
             <MousePointerClick className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold" data-testid="text-stat-total-clicks">
-              5,340
+            <div className="text-2xl font-bold" data-testid="text-stat-in-escrow">
+              ETB {totalInEscrow}
             </div>
           </CardContent>
         </Card>
@@ -159,18 +206,24 @@ export default function Campaigns() {
         </div>
         <Tabs
           value={statusFilter}
-          onValueChange={(value) => setStatusFilter(value as any)}
+          onValueChange={(value) => setStatusFilter(value)}
           data-testid="tabs-campaign-filter"
         >
           <TabsList>
             <TabsTrigger value="all" data-testid="tab-filter-all">
               All
             </TabsTrigger>
+            <TabsTrigger value="pending_review" data-testid="tab-filter-pending">
+              Pending
+            </TabsTrigger>
             <TabsTrigger value="active" data-testid="tab-filter-active">
               Active
             </TabsTrigger>
-            <TabsTrigger value="paused" data-testid="tab-filter-paused">
-              Paused
+            <TabsTrigger value="cancelled" data-testid="tab-filter-cancelled">
+              Cancelled
+            </TabsTrigger>
+            <TabsTrigger value="rejected" data-testid="tab-filter-rejected">
+              Rejected
             </TabsTrigger>
             <TabsTrigger value="completed" data-testid="tab-filter-completed">
               Completed
@@ -187,14 +240,28 @@ export default function Campaigns() {
             {filteredCampaigns.length} campaign{filteredCampaigns.length !== 1 ? "s" : ""}
           </p>
         </div>
-        {filteredCampaigns.length > 0 ? (
+        {loading ? (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mb-2" />
+              <p className="text-muted-foreground">Loading campaigns...</p>
+            </CardContent>
+          </Card>
+        ) : filteredCampaigns.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredCampaigns.map((campaign) => (
               <CampaignCard
                 key={campaign.id}
-                {...campaign}
+                id={campaign.id}
+                name={campaign.name}
+                type={campaign.type || "link"}
+                budget={`ETB ${parseFloat(campaign.budget).toFixed(2)}`}
+                spent={`ETB ${parseFloat(campaign.spent).toFixed(2)}`}
+                clicks={0}
+                status={campaign.status}
                 onViewDetails={() => handleViewDetails(campaign)}
                 onDelete={() => handleDeleteCampaign(campaign.id)}
+                onCancel={["pending_review", "active", "paused"].includes(campaign.status) ? () => handleCancelCampaign(campaign.id) : undefined}
               />
             ))}
           </div>
@@ -218,7 +285,7 @@ export default function Campaigns() {
         )}
       </div>
 
-      <CreateCampaignDialog open={createDialogOpen} onOpenChange={setCreateDialogOpen} />
+      <CreateCampaignDialog open={createDialogOpen} onOpenChange={handleCreateDialogChange} />
 
       {selectedCampaign && (
         <CampaignDetailsDialog

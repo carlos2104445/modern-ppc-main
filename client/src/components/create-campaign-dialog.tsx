@@ -83,33 +83,56 @@ export function CreateCampaignDialog({ open, onOpenChange }: CreateCampaignDialo
       return;
     }
 
-    console.log("Creating campaign:", {
-      adType,
-      campaignName,
-      description,
-      targetUrl,
-      youtubeUrl,
-      bannerUrl,
-      budget,
-      cpc,
-      targetAudience,
-    });
+    try {
+      const response = await fetch("/api/v1/campaigns", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          name: campaignName,
+          type: adType,
+          description,
+          url: adType === "link" ? targetUrl : adType === "youtube" ? youtubeUrl : bannerUrl,
+          imageUrl: adType === "banner" ? bannerUrl : undefined,
+          budget,
+          cpc,
+          duration: 15,
+        }),
+      });
 
-    toast({
-      title: "Campaign created",
-      description: `Your ${adType} campaign "${campaignName}" has been submitted for review.`,
-    });
+      const data = await response.json();
 
-    // Reset form
-    setCampaignName("");
-    setDescription("");
-    setTargetUrl("");
-    setYoutubeUrl("");
-    setBannerUrl("");
-    setBudget("");
-    setCpc("");
-    setTargetAudience("");
-    onOpenChange(false);
+      if (!response.ok) {
+        toast({
+          title: "Campaign creation failed",
+          description: data.error || "Something went wrong",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      toast({
+        title: "Campaign created!",
+        description: `Your ${adType} campaign "${campaignName}" has been submitted for review. ETB ${budget} has been placed in escrow.`,
+      });
+
+      // Reset form
+      setCampaignName("");
+      setDescription("");
+      setTargetUrl("");
+      setYoutubeUrl("");
+      setBannerUrl("");
+      setBudget("");
+      setCpc("");
+      setTargetAudience("");
+      onOpenChange(false);
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to create campaign",
+        variant: "destructive",
+      });
+    }
   };
 
   return (

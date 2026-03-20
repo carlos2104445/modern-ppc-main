@@ -58,10 +58,22 @@ export const campaigns = pgTable(
       .notNull()
       .references(() => users.id),
     name: text("name").notNull(),
+    type: text("type").notNull().default("link"),
+    description: text("description").notNull().default(""),
+    url: text("url").notNull().default(""),
+    imageUrl: text("image_url"),
     budget: decimal("budget", { precision: 10, scale: 2 }).notNull(),
+    cpc: decimal("cpc", { precision: 10, scale: 2 }).notNull().default("0.50"),
+    duration: integer("duration").notNull().default(15),
     spent: decimal("spent", { precision: 10, scale: 2 }).notNull().default("0.00"),
-    status: text("status").notNull().default("active"),
+    escrowAmount: decimal("escrow_amount", { precision: 10, scale: 2 }).notNull().default("0.00"),
+    refundedAmount: decimal("refunded_amount", { precision: 10, scale: 2 }).notNull().default("0.00"),
+    status: text("status").notNull().default("pending_review"),
+    rejectionReason: text("rejection_reason"),
+    reviewedBy: varchar("reviewed_by"),
+    reviewedAt: timestamp("reviewed_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (table) => ({
     userIdIdx: index("campaigns_user_id_idx").on(table.userId),
@@ -480,6 +492,12 @@ export const insertUserSchema = createInsertSchema(users).pick({
 export const insertCampaignSchema = createInsertSchema(campaigns).pick({
   name: true,
   budget: true,
+  type: true,
+  description: true,
+  url: true,
+  imageUrl: true,
+  cpc: true,
+  duration: true,
 });
 
 export const insertAdSchema = createInsertSchema(ads).pick({

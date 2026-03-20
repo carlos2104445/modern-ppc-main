@@ -2,7 +2,7 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/componen
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { DollarSign, MousePointerClick, Pause, Play, Trash2, MoreVertical } from "lucide-react";
+import { DollarSign, MousePointerClick, Pause, Play, Trash2, MoreVertical, XCircle } from "lucide-react";
 import { useState } from "react";
 import {
   DropdownMenu,
@@ -10,61 +10,48 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useToast } from "@/hooks/use-toast";
 
 interface CampaignCardProps {
   id: string;
   name: string;
+  type?: string;
   budget: string;
   spent: string;
   clicks: number;
-  status: "active" | "paused" | "completed";
+  status: string;
   onViewDetails?: () => void;
   onDelete?: () => void;
+  onCancel?: () => void;
 }
 
 export function CampaignCard({
   id,
   name,
+  type,
   budget,
   spent,
   clicks,
-  status: initialStatus,
+  status,
   onViewDetails,
   onDelete,
+  onCancel,
 }: CampaignCardProps) {
-  const { toast } = useToast();
-  const [status, setStatus] = useState(initialStatus);
-
   const budgetNum = parseFloat(budget.replace(/[^0-9.-]/g, ""));
   const spentNum = parseFloat(spent.replace(/[^0-9.-]/g, ""));
   const progress = budgetNum > 0 ? (spentNum / budgetNum) * 100 : 0;
 
-  const handleToggle = () => {
-    const newStatus = status === "active" ? "paused" : "active";
-    setStatus(newStatus);
-    toast({
-      title: `Campaign ${newStatus}`,
-      description: `"${name}" has been ${newStatus}`,
-    });
+  const statusConfig: Record<string, { label: string; color: string }> = {
+    pending_review: { label: "Pending Review", color: "bg-yellow-500/10 text-yellow-600 border-yellow-200" },
+    active: { label: "Active", color: "bg-green-500/10 text-green-600 border-green-200" },
+    paused: { label: "Paused", color: "bg-blue-500/10 text-blue-600 border-blue-200" },
+    completed: { label: "Completed", color: "bg-muted text-muted-foreground" },
+    cancelled: { label: "Cancelled", color: "bg-orange-500/10 text-orange-600 border-orange-200" },
+    rejected: { label: "Rejected", color: "bg-red-500/10 text-red-600 border-red-200" },
   };
 
-  const handleDelete = () => {
-    if (onDelete) {
-      onDelete();
-      toast({
-        title: "Campaign deleted",
-        description: `"${name}" has been removed`,
-        variant: "destructive",
-      });
-    }
-  };
-
-  const statusColors = {
-    active: "bg-chart-2",
-    paused: "bg-chart-4",
-    completed: "bg-muted",
-  };
+  const currentStatus = statusConfig[status] || { label: status, color: "bg-muted" };
+  const canCancel = ["pending_review", "active", "paused"].includes(status);
+  const isTerminal = ["completed", "cancelled", "rejected"].includes(status);
 
   return (
     <Card className="hover-elevate">
@@ -76,11 +63,16 @@ export function CampaignCard({
           <div className="flex items-center gap-2 mt-2">
             <Badge
               variant="outline"
-              className={statusColors[status]}
+              className={currentStatus.color}
               data-testid={`badge-campaign-status-${id}`}
             >
-              {status}
+              {currentStatus.label}
             </Badge>
+            {type && (
+              <Badge variant="secondary" className="text-xs">
+                {type}
+              </Badge>
+            )}
           </div>
         </div>
         <DropdownMenu>
@@ -93,8 +85,18 @@ export function CampaignCard({
             <DropdownMenuItem onClick={onViewDetails} data-testid={`menu-view-details-${id}`}>
               View Details
             </DropdownMenuItem>
+            {canCancel && onCancel && (
+              <DropdownMenuItem
+                onClick={onCancel}
+                className="text-orange-600"
+                data-testid={`menu-cancel-${id}`}
+              >
+                <XCircle className="h-4 w-4 mr-2" />
+                Cancel & Refund
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem
-              onClick={handleDelete}
+              onClick={onDelete}
               className="text-destructive"
               data-testid={`menu-delete-${id}`}
             >
@@ -131,20 +133,30 @@ export function CampaignCard({
         </div>
       </CardContent>
       <CardFooter className="gap-2">
-        <Button
-          variant="outline"
-          className="flex-1"
-          onClick={handleToggle}
-          disabled={status === "completed"}
-          data-testid={`button-toggle-campaign-${id}`}
-        >
-          {status === "active" ? (
-            <Pause className="h-4 w-4 mr-2" />
-          ) : (
-            <Play className="h-4 w-4 mr-2" />
-          )}
-          {status === "active" ? "Pause" : "Resume"}
-        </Button>
+        {canCancel && onCancel ? (
+          <Button
+            variant="outline"
+            className="flex-1 text-orange-600 border-orange-200 hover:bg-orange-50"
+            onClick={onCancel}
+            data-testid={`button-cancel-campaign-${id}`}
+          >
+            <XCircle className="h-4 w-4 mr-2" />
+            Cancel & Refund
+          </Button>
+        ) : (
+          <Button
+            variant="outline"
+            className="flex-1"
+            disabled={isTerminal}
+            data-testid={`button-toggle-campaign-${id}`}
+          >
+            {isTerminal ? status : status === "active" ? (
+              <><Pause className="h-4 w-4 mr-2" /> Pause</>
+            ) : (
+              <><Play className="h-4 w-4 mr-2" /> Resume</>
+            )}
+          </Button>
+        )}
         <Button
           variant="secondary"
           className="flex-1"

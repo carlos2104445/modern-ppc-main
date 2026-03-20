@@ -285,6 +285,175 @@ export function registerV1Routes(app: Express): void {
     }
   });
 
+  // ==========================================
+  // Campaign routes (with escrow/refund)
+  // ==========================================
+
+  // Create a campaign — freezes budget from user balance into escrow
+  app.post(`${API_PREFIX}/campaigns`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid or expired token" });
+
+      const { name, type, description, url, imageUrl, budget, cpc, duration } = req.body;
+
+      if (!name || !budget || !cpc) {
+        return res.status(400).json({ error: "Name, budget, and cost per click are required" });
+      }
+
+      const { campaignService } = await import("./campaign-service");
+      const campaign = await campaignService.createCampaign({
+        userId: decoded.userId,
+        name,
+        type: type || "link",
+        description: description || "",
+        url: url || "",
+        imageUrl,
+        budget: budget.toString(),
+        cpc: cpc.toString(),
+        duration: parseInt(duration) || 15,
+      });
+
+      res.status(201).json({ campaign, message: "Campaign created. Budget has been placed in escrow pending review." });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "Failed to create campaign" });
+    }
+  });
+
+  // List user's campaigns
+  app.get(`${API_PREFIX}/campaigns`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid or expired token" });
+
+      const { campaignService } = await import("./campaign-service");
+      const campaigns = await campaignService.getUserCampaigns(decoded.userId);
+      res.json(campaigns);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch campaigns" });
+    }
+  });
+
+  // Get campaign details
+  app.get(`${API_PREFIX}/campaigns/:id`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid or expired token" });
+
+      const { campaignService } = await import("./campaign-service");
+      const campaign = await campaignService.getCampaign(req.params.id);
+      if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+      if (campaign.userId !== decoded.userId && decoded.role !== "admin") {
+        return res.status(403).json({ error: "Not authorized" });
+      }
+
+      res.json(campaign);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch campaign" });
+    }
+  });
+
+  // Cancel a campaign — refunds unspent escrow to user
+  app.patch(`${API_PREFIX}/campaigns/:id/cancel`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid or expired token" });
+
+      const { campaignService } = await import("./campaign-service");
+      const campaign = await campaignService.cancelCampaign(req.params.id, decoded.userId);
+      res.json({ campaign, message: "Campaign cancelled. Unspent escrow has been refunded to your balance." });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "Failed to cancel campaign" });
+    }
+  });
+
+  // Delete a campaign — refunds unspent escrow and removes campaign
+  app.delete(`${API_PREFIX}/campaigns/:id`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid or expired token" });
+
+      const { campaignService } = await import("./campaign-service");
+      const result = await campaignService.deleteCampaign(req.params.id, decoded.userId);
+      res.json({ ...result, message: `Campaign deleted. ETB ${result.refunded} refunded to your balance.` });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "Failed to delete campaign" });
+    }
+  });
+
+  // Admin: approve a campaign
+  app.patch(`${API_PREFIX}/campaigns/:id/approve`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded || (decoded.role !== "admin" && decoded.role !== "staff")) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const { campaignService } = await import("./campaign-service");
+      const campaign = await campaignService.approveCampaign(req.params.id, decoded.userId);
+      res.json({ campaign, message: "Campaign approved and is now active." });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "Failed to approve campaign" });
+    }
+  });
+
+  // Admin: reject a campaign — refunds escrow to user
+  app.patch(`${API_PREFIX}/campaigns/:id/reject`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded || (decoded.role !== "admin" && decoded.role !== "staff")) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const { reason } = req.body;
+      const { campaignService } = await import("./campaign-service");
+      const campaign = await campaignService.rejectCampaign(req.params.id, decoded.userId, reason || "Campaign rejected by admin");
+      res.json({ campaign, message: "Campaign rejected. Escrow has been refunded to the user." });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "Failed to reject campaign" });
+    }
+  });
+
+  // Admin: list all campaigns
+  app.get(`${API_PREFIX}/admin/campaigns`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded || (decoded.role !== "admin" && decoded.role !== "staff")) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const { campaignService } = await import("./campaign-service");
+      const campaigns = await campaignService.getAllCampaigns();
+      res.json(campaigns);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch campaigns" });
+    }
+  });
+
   // Blog posts routes
   app.get(`${API_PREFIX}/blog-posts`, async (req, res) => {
     try {
