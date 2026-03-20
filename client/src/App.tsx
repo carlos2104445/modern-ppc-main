@@ -84,6 +84,7 @@ function AppContent() {
     location === "/" ||
     location === "/landing" ||
     location === "/signin" ||
+    location === "/login" ||
     location === "/register" ||
     location === "/pricing" ||
     location === "/about" ||
@@ -123,6 +124,7 @@ function AppContent() {
           <Route path="/faqs" component={FAQs} />
           <Route path="/health" component={Health} />
           <Route path="/signin" component={SignIn} />
+          <Route path="/login">{() => { window.location.replace("/signin"); return null; }}</Route>
           <Route path="/register" component={Register} />
           <Route path="/admin/login" component={AdminLogin} />
           <Route path="/admin/password-reset-request" component={AdminPasswordResetRequest} />
