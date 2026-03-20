@@ -80,6 +80,19 @@ export const adViewRateLimiter = createRateLimiter({
 
 export const authRateLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
-  maxRequests: 5,
+  maxRequests: 10,
   keyPrefix: "rate-limit:auth",
 });
+
+export const paymentRateLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  maxRequests: 20,
+  keyPrefix: "rate-limit:payment",
+});
+
+export const campaignRateLimiter = createRateLimiter({
+  windowMs: 60 * 60 * 1000,
+  maxRequests: 20,
+  keyPrefix: "rate-limit:campaign",
+});
+

@@ -1,50 +1,62 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ReferralTree } from "@/components/referral-tree";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatCard } from "@/components/stat-card";
 import { Button } from "@/components/ui/button";
-import { Users, DollarSign, TrendingUp, UserPlus } from "lucide-react";
+import { Users, DollarSign, TrendingUp, UserPlus, Copy, Loader2 } from "lucide-react";
 import { InviteReferralDialog } from "@/components/invite-referral-dialog";
+import { useAuth } from "@/hooks/use-auth-context";
+import { useToast } from "@/hooks/use-toast";
 
 export default function Referrals() {
+  const { user } = useAuth();
+  const { toast } = useToast();
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
+  const [referralData, setReferralData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
 
-  const referrals = [
-    {
-      id: "1",
-      name: "Alice Johnson",
-      earnings: "ETB 125.50",
-      level: 1,
-      children: [
-        {
-          id: "2",
-          name: "Bob Smith",
-          earnings: "ETB 45.20",
-          level: 2,
-          children: [
-            {
-              id: "3",
-              name: "Charlie Brown",
-              earnings: "ETB 12.30",
-              level: 3,
-            },
-          ],
-        },
-        {
-          id: "4",
-          name: "Diana Prince",
-          earnings: "ETB 78.90",
-          level: 2,
-        },
-      ],
-    },
-    {
-      id: "5",
-      name: "Eve Wilson",
-      earnings: "ETB 89.40",
-      level: 1,
-    },
-  ];
+  useEffect(() => {
+    async function fetchReferrals() {
+      try {
+        const res = await fetch("/api/v1/user/referrals", { credentials: "include" });
+        if (res.ok) {
+          const data = await res.json();
+          setReferralData(data);
+        }
+      } catch (err) {
+        console.error("Failed to fetch referral data:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    if (user) fetchReferrals();
+  }, [user]);
+
+  const copyReferralCode = () => {
+    const code = referralData?.referralCode || user?.referralCode || "";
+    navigator.clipboard.writeText(code);
+    toast({ title: "Copied!", description: `Referral code ${code} copied to clipboard` });
+  };
+
+  const referralCode = referralData?.referralCode || user?.referralCode || "—";
+  const totalReferrals = referralData?.totalReferrals || 0;
+  const totalCommission = referralData?.totalCommission || "0.00";
+
+  // Build referral tree from flat referral list
+  const referrals = (referralData?.referrals || []).map((r: any, i: number) => ({
+    id: r.id,
+    name: r.name,
+    earnings: `ETB ${parseFloat(r.earnings || "0").toFixed(2)}`,
+    level: 1,
+  }));
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -59,18 +71,37 @@ export default function Referrals() {
         </Button>
       </div>
 
+      {/* Referral Code Card */}
+      <Card>
+        <CardContent className="p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-muted-foreground">Your Referral Code</p>
+              <p className="text-3xl font-mono font-bold mt-1">{referralCode}</p>
+            </div>
+            <Button variant="outline" onClick={copyReferralCode}>
+              <Copy className="h-4 w-4 mr-2" /> Copy Code
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <StatCard title="Total Referrals" value="23" description="Across all levels" icon={Users} />
+        <StatCard
+          title="Total Referrals"
+          value={totalReferrals.toString()}
+          description="Direct referrals"
+          icon={Users}
+        />
         <StatCard
           title="Commission Earned"
-          value="ETB 351.30"
+          value={`ETB ${totalCommission}`}
           description="Lifetime commissions"
           icon={DollarSign}
-          trend={{ value: "8.2%", isPositive: true }}
         />
         <StatCard
           title="This Month"
-          value="ETB 87.50"
+          value={`ETB ${totalCommission}`}
           description="Current month earnings"
           icon={TrendingUp}
         />

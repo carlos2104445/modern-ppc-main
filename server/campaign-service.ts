@@ -6,7 +6,10 @@ import { cache } from "./redis";
 /**
  * Campaign Escrow Service
  * 
- * Handles all financial operations for campaigns:
+ * All financial operations are wrapped in database transactions
+ * to ensure atomicity. If any step fails, everything is rolled back.
+ * 
+ * Handles:
  * - Create: freeze budget from user balance → escrow
  * - Approve: activate campaign
  * - Reject: refund escrow → user balance
@@ -30,6 +33,7 @@ export interface CreateCampaignInput {
 export class CampaignService {
   /**
    * Create a campaign with escrow — freezes budget from user balance
+   * ATOMIC: deduct balance + create campaign + log transaction
    */
   async createCampaign(input: CreateCampaignInput) {
     const budgetAmount = parseFloat(input.budget);
@@ -46,60 +50,60 @@ export class CampaignService {
       throw new Error("Cost per click cannot exceed total budget");
     }
 
-    // Get user and verify balance
-    const [user] = await db.select().from(users).where(eq(users.id, input.userId)).limit(1);
-    if (!user) {
-      throw new Error("User not found");
-    }
+    // Wrap everything in a transaction
+    return await db.transaction(async (tx) => {
+      // Get user and verify balance (inside transaction for consistency)
+      const [user] = await tx.select().from(users).where(eq(users.id, input.userId)).limit(1);
+      if (!user) throw new Error("User not found");
 
-    const userBalance = parseFloat(user.balance);
-    if (userBalance < budgetAmount) {
-      throw new Error(
-        `Insufficient balance. You have ETB ${userBalance.toFixed(2)} but the campaign requires ETB ${budgetAmount.toFixed(2)}`
-      );
-    }
+      const userBalance = parseFloat(user.balance);
+      if (userBalance < budgetAmount) {
+        throw new Error(
+          `Insufficient balance. You have ETB ${userBalance.toFixed(2)} but the campaign requires ETB ${budgetAmount.toFixed(2)}`
+        );
+      }
 
-    // Atomic transaction: deduct balance + create campaign + log transaction
-    const newBalance = (userBalance - budgetAmount).toFixed(2);
+      // Create campaign
+      const [campaign] = await tx
+        .insert(campaigns)
+        .values({
+          userId: input.userId,
+          name: input.name,
+          type: input.type,
+          description: input.description,
+          url: input.url,
+          imageUrl: input.imageUrl || null,
+          budget: input.budget,
+          cpc: input.cpc,
+          duration: input.duration,
+          escrowAmount: input.budget,
+          spent: "0.00",
+          refundedAmount: "0.00",
+          status: "pending_review",
+        })
+        .returning();
 
-    const [campaign] = await db
-      .insert(campaigns)
-      .values({
+      // Deduct from user balance
+      const newBalance = (userBalance - budgetAmount).toFixed(2);
+      await tx
+        .update(users)
+        .set({ balance: newBalance })
+        .where(eq(users.id, input.userId));
+
+      // Log the escrow transaction
+      await tx.insert(transactions).values({
         userId: input.userId,
-        name: input.name,
-        type: input.type,
-        description: input.description,
-        url: input.url,
-        imageUrl: input.imageUrl || null,
-        budget: input.budget,
-        cpc: input.cpc,
-        duration: input.duration,
-        escrowAmount: input.budget,
-        spent: "0.00",
-        refundedAmount: "0.00",
-        status: "pending_review",
-      })
-      .returning();
+        type: "campaign_escrow",
+        amount: `-${input.budget}`,
+        description: `Campaign "${input.name}" — budget frozen in escrow`,
+        status: "completed",
+      });
 
-    // Deduct from user balance
-    await db
-      .update(users)
-      .set({ balance: newBalance })
-      .where(eq(users.id, input.userId));
+      // Invalidate cache (outside transaction is fine)
+      await cache.del(`user:${input.userId}`).catch(() => {});
 
-    // Log the escrow transaction
-    await db.insert(transactions).values({
-      userId: input.userId,
-      type: "campaign_escrow",
-      amount: `-${input.budget}`,
-      description: `Campaign "${input.name}" — budget frozen in escrow`,
-      status: "completed",
+      return campaign;
     });
-
-    // Invalidate cache
-    await cache.del(`user:${input.userId}`);
-
-    return campaign;
   }
 
   /**
@@ -161,6 +165,7 @@ export class CampaignService {
 
   /**
    * Admin rejects a campaign — refunds full escrow to user
+   * ATOMIC: refund balance + log transaction + update campaign
    */
   async rejectCampaign(campaignId: string, adminId: string, reason: string) {
     const campaign = await this.getCampaign(campaignId);
@@ -170,43 +175,45 @@ export class CampaignService {
     }
 
     const refundAmount = parseFloat(campaign.escrowAmount) - parseFloat(campaign.spent);
-    if (refundAmount <= 0) {
-      // Nothing to refund, just update status
-      const [updated] = await db
+
+    return await db.transaction(async (tx) => {
+      if (refundAmount > 0) {
+        // Refund to user
+        await tx
+          .update(users)
+          .set({ balance: sql`CAST(${users.balance} AS numeric) + ${refundAmount}` })
+          .where(eq(users.id, campaign.userId));
+
+        await tx.insert(transactions).values({
+          userId: campaign.userId,
+          type: "campaign_refund",
+          amount: refundAmount.toFixed(2),
+          description: `Campaign "${campaign.name}" rejected — escrow refunded`,
+          status: "completed",
+        });
+      }
+
+      const [updated] = await tx
         .update(campaigns)
         .set({
           status: "rejected",
           rejectionReason: reason,
+          refundedAmount: refundAmount > 0 ? refundAmount.toFixed(2) : campaign.refundedAmount,
           reviewedBy: adminId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
         })
         .where(eq(campaigns.id, campaignId))
         .returning();
+
+      await cache.del(`user:${campaign.userId}`).catch(() => {});
       return updated;
-    }
-
-    // Refund to user
-    await this.processRefund(campaign.userId, campaignId, refundAmount, `Campaign "${campaign.name}" rejected — escrow refunded`);
-
-    const [updated] = await db
-      .update(campaigns)
-      .set({
-        status: "rejected",
-        rejectionReason: reason,
-        refundedAmount: refundAmount.toFixed(2),
-        reviewedBy: adminId,
-        reviewedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(campaigns.id, campaignId))
-      .returning();
-
-    return updated;
+    });
   }
 
   /**
    * User cancels their own campaign — refunds unspent escrow
+   * ATOMIC: refund balance + log transaction + update campaign
    */
   async cancelCampaign(campaignId: string, userId: string) {
     const campaign = await this.getCampaign(campaignId);
@@ -218,25 +225,40 @@ export class CampaignService {
 
     const refundAmount = parseFloat(campaign.escrowAmount) - parseFloat(campaign.spent);
 
-    if (refundAmount > 0) {
-      await this.processRefund(userId, campaignId, refundAmount, `Campaign "${campaign.name}" cancelled — unspent escrow refunded`);
-    }
+    return await db.transaction(async (tx) => {
+      if (refundAmount > 0) {
+        await tx
+          .update(users)
+          .set({ balance: sql`CAST(${users.balance} AS numeric) + ${refundAmount}` })
+          .where(eq(users.id, userId));
 
-    const [updated] = await db
-      .update(campaigns)
-      .set({
-        status: "cancelled",
-        refundedAmount: refundAmount > 0 ? refundAmount.toFixed(2) : campaign.refundedAmount,
-        updatedAt: new Date(),
-      })
-      .where(eq(campaigns.id, campaignId))
-      .returning();
+        await tx.insert(transactions).values({
+          userId,
+          type: "campaign_refund",
+          amount: refundAmount.toFixed(2),
+          description: `Campaign "${campaign.name}" cancelled — unspent escrow refunded`,
+          status: "completed",
+        });
+      }
 
-    return updated;
+      const [updated] = await tx
+        .update(campaigns)
+        .set({
+          status: "cancelled",
+          refundedAmount: refundAmount > 0 ? refundAmount.toFixed(2) : campaign.refundedAmount,
+          updatedAt: new Date(),
+        })
+        .where(eq(campaigns.id, campaignId))
+        .returning();
+
+      await cache.del(`user:${userId}`).catch(() => {});
+      return updated;
+    });
   }
 
   /**
    * Delete a campaign — refunds unspent escrow and removes campaign
+   * ATOMIC: refund + delete + log
    */
   async deleteCampaign(campaignId: string, userId: string) {
     const campaign = await this.getCampaign(campaignId);
@@ -245,16 +267,32 @@ export class CampaignService {
 
     const refundAmount = parseFloat(campaign.escrowAmount) - parseFloat(campaign.spent) - parseFloat(campaign.refundedAmount);
 
-    if (refundAmount > 0) {
-      await this.processRefund(userId, campaignId, refundAmount, `Campaign "${campaign.name}" deleted — unspent escrow refunded`);
-    }
+    return await db.transaction(async (tx) => {
+      if (refundAmount > 0) {
+        await tx
+          .update(users)
+          .set({ balance: sql`CAST(${users.balance} AS numeric) + ${refundAmount}` })
+          .where(eq(users.id, userId));
 
-    await db.delete(campaigns).where(eq(campaigns.id, campaignId));
-    return { deleted: true, refunded: refundAmount > 0 ? refundAmount.toFixed(2) : "0.00" };
+        await tx.insert(transactions).values({
+          userId,
+          type: "campaign_refund",
+          amount: refundAmount.toFixed(2),
+          description: `Campaign "${campaign.name}" deleted — unspent escrow refunded`,
+          status: "completed",
+        });
+      }
+
+      await tx.delete(campaigns).where(eq(campaigns.id, campaignId));
+
+      await cache.del(`user:${userId}`).catch(() => {});
+      return { deleted: true, refunded: refundAmount > 0 ? refundAmount.toFixed(2) : "0.00" };
+    });
   }
 
   /**
    * Record a click on a campaign — deducts CPC from escrow, increments spent
+   * ATOMIC: update spent + check budget exhaustion
    */
   async recordClick(campaignId: string, clickAmount: number) {
     const campaign = await this.getCampaign(campaignId);
@@ -263,7 +301,6 @@ export class CampaignService {
 
     const remainingEscrow = parseFloat(campaign.escrowAmount) - parseFloat(campaign.spent);
     if (remainingEscrow < clickAmount) {
-      // Budget exhausted — complete the campaign and refund remainder
       await this.completeCampaign(campaignId);
       throw new Error("Campaign budget exhausted");
     }
@@ -285,6 +322,7 @@ export class CampaignService {
 
   /**
    * Complete a campaign — refunds any remaining unspent escrow
+   * ATOMIC: refund + update status
    */
   async completeCampaign(campaignId: string) {
     const campaign = await this.getCampaign(campaignId);
@@ -292,46 +330,35 @@ export class CampaignService {
 
     const refundAmount = parseFloat(campaign.escrowAmount) - parseFloat(campaign.spent) - parseFloat(campaign.refundedAmount);
 
-    if (refundAmount > 0) {
-      await this.processRefund(campaign.userId, campaignId, refundAmount, `Campaign "${campaign.name}" completed — remaining escrow refunded`);
-    }
+    return await db.transaction(async (tx) => {
+      if (refundAmount > 0) {
+        await tx
+          .update(users)
+          .set({ balance: sql`CAST(${users.balance} AS numeric) + ${refundAmount}` })
+          .where(eq(users.id, campaign.userId));
 
-    const [updated] = await db
-      .update(campaigns)
-      .set({
-        status: "completed",
-        refundedAmount: (parseFloat(campaign.refundedAmount) + Math.max(refundAmount, 0)).toFixed(2),
-        updatedAt: new Date(),
-      })
-      .where(eq(campaigns.id, campaignId))
-      .returning();
+        await tx.insert(transactions).values({
+          userId: campaign.userId,
+          type: "campaign_refund",
+          amount: refundAmount.toFixed(2),
+          description: `Campaign "${campaign.name}" completed — remaining escrow refunded`,
+          status: "completed",
+        });
+      }
 
-    return updated;
-  }
+      const [updated] = await tx
+        .update(campaigns)
+        .set({
+          status: "completed",
+          refundedAmount: (parseFloat(campaign.refundedAmount) + Math.max(refundAmount, 0)).toFixed(2),
+          updatedAt: new Date(),
+        })
+        .where(eq(campaigns.id, campaignId))
+        .returning();
 
-  /**
-   * Internal: process a refund — add to user balance + log transaction
-   */
-  private async processRefund(userId: string, campaignId: string, amount: number, description: string) {
-    // Add to user balance
-    await db
-      .update(users)
-      .set({
-        balance: sql`CAST(${users.balance} AS numeric) + ${amount}`,
-      })
-      .where(eq(users.id, userId));
-
-    // Log the refund transaction
-    await db.insert(transactions).values({
-      userId,
-      type: "campaign_refund",
-      amount: amount.toFixed(2),
-      description,
-      status: "completed",
+      await cache.del(`user:${campaign.userId}`).catch(() => {});
+      return updated;
     });
-
-    // Invalidate cache
-    await cache.del(`user:${userId}`);
   }
 }
 

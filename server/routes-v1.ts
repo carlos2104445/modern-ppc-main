@@ -1,8 +1,8 @@
 import type { Express } from "express";
 import { pgStorage as storage } from "./pg-storage";
 import { db } from "./db";
-import { users, transactions as txns } from "@shared/schema";
-import { sql, eq } from "drizzle-orm";
+import { users, transactions as txns, depositRequests, withdrawalRequests } from "@shared/schema";
+import { sql, eq, and } from "drizzle-orm";
 import { cache } from "./redis";
 import {
   insertBlogPostSchema,
@@ -26,6 +26,7 @@ import bcrypt from "bcrypt";
 import { pool } from "./db";
 import redis from "./redis";
 import { jwtService } from "./jwt";
+import { paymentRateLimiter, adViewRateLimiter, campaignRateLimiter } from "./middleware/rate-limit";
 
 export function registerV1Routes(app: Express): void {
   const API_PREFIX = "/api/v1";
@@ -466,7 +467,7 @@ export function registerV1Routes(app: Express): void {
   }, 5 * 60 * 1000);
 
   // Start an ad view session
-  app.post(`${API_PREFIX}/ad-views/start`, async (req, res) => {
+  app.post(`${API_PREFIX}/ad-views/start`, adViewRateLimiter, async (req, res) => {
     try {
       const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
       if (!token) return res.status(401).json({ error: "Authentication required" });
@@ -612,7 +613,7 @@ export function registerV1Routes(app: Express): void {
   // ==========================================
 
   // Deposit via Chapa (automated)
-  app.post(`${API_PREFIX}/payments/deposit`, async (req, res) => {
+  app.post(`${API_PREFIX}/payments/deposit`, paymentRateLimiter, async (req, res) => {
     try {
       const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
       if (!token) return res.status(401).json({ error: "Authentication required" });
@@ -676,7 +677,7 @@ export function registerV1Routes(app: Express): void {
   });
 
   // Deposit manually (bank transfer, etc.)
-  app.post(`${API_PREFIX}/payments/deposit/manual`, async (req, res) => {
+  app.post(`${API_PREFIX}/payments/deposit/manual`, paymentRateLimiter, async (req, res) => {
     try {
       const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
       if (!token) return res.status(401).json({ error: "Authentication required" });
@@ -800,7 +801,7 @@ export function registerV1Routes(app: Express): void {
   });
 
   // Withdraw funds
-  app.post(`${API_PREFIX}/payments/withdraw`, async (req, res) => {
+  app.post(`${API_PREFIX}/payments/withdraw`, paymentRateLimiter, async (req, res) => {
     try {
       const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
       if (!token) return res.status(401).json({ error: "Authentication required" });
@@ -1691,6 +1692,334 @@ export function registerV1Routes(app: Express): void {
       res.json(logs);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch audit logs" });
+    }
+  });
+
+  // ==========================================
+  // Leaderboard API — real data from DB
+  // ==========================================
+
+  app.get(`${API_PREFIX}/leaderboard/:type`, async (req, res) => {
+    try {
+      const { type } = req.params;
+      const limit = Math.min(parseInt(req.query.limit as string) || 10, 50);
+      let results: any[] = [];
+
+      switch (type) {
+        case "earners":
+          results = await db
+            .select({
+              userId: users.id,
+              name: sql`CONCAT(${users.firstName}, ' ', ${users.lastName})`,
+              value: sql`CAST(${users.lifetimeEarnings} AS numeric)`,
+            })
+            .from(users)
+            .orderBy(sql`CAST(${users.lifetimeEarnings} AS numeric) DESC`)
+            .limit(limit);
+          break;
+
+        case "advertisers":
+          results = await db
+            .select({
+              userId: users.id,
+              name: sql`CONCAT(${users.firstName}, ' ', ${users.lastName})`,
+              value: sql`CAST(${users.lifetimeSpending} AS numeric)`,
+            })
+            .from(users)
+            .orderBy(sql`CAST(${users.lifetimeSpending} AS numeric) DESC`)
+            .limit(limit);
+          break;
+
+        case "streaks":
+          results = await db
+            .select({
+              userId: users.id,
+              name: sql`CONCAT(${users.firstName}, ' ', ${users.lastName})`,
+              value: users.currentStreak,
+            })
+            .from(users)
+            .orderBy(sql`${users.currentStreak} DESC`)
+            .limit(limit);
+          break;
+
+        case "referrers":
+          // Count referrals per user
+          results = await db
+            .select({
+              userId: users.id,
+              name: sql`CONCAT(${users.firstName}, ' ', ${users.lastName})`,
+              value: sql`(SELECT COUNT(*) FROM users AS r WHERE r.referred_by = ${users.id})`,
+            })
+            .from(users)
+            .orderBy(sql`(SELECT COUNT(*) FROM users AS r WHERE r.referred_by = ${users.id}) DESC`)
+            .limit(limit);
+          break;
+
+        default:
+          return res.status(400).json({ error: "Invalid leaderboard type" });
+      }
+
+      // Add rank and determine if current user (from token if present)
+      let currentUserId: string | null = null;
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (token) {
+        try {
+          const decoded = jwtService.verifyAccessToken(token);
+          currentUserId = decoded?.userId || null;
+        } catch {}
+      }
+
+      const ranked = results.map((r: any, i: number) => ({
+        rank: i + 1,
+        userId: r.userId,
+        name: r.name,
+        value: parseFloat(r.value) || 0,
+        isCurrentUser: r.userId === currentUserId,
+      }));
+
+      res.json(ranked);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch leaderboard" });
+    }
+  });
+
+  // ==========================================
+  // Referral stats API
+  // ==========================================
+
+  app.get(`${API_PREFIX}/user/referrals`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid token" });
+
+      const user = await storage.getUser(decoded.userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      // Get direct referrals (users who used this user's referral code)
+      const directReferrals = await db
+        .select({
+          id: users.id,
+          name: sql`CONCAT(${users.firstName}, ' ', ${users.lastName})`,
+          joinedAt: users.createdAt,
+          earnings: users.lifetimeEarnings,
+        })
+        .from(users)
+        .where(eq(users.referredBy, decoded.userId))
+        .orderBy(sql`${users.createdAt} DESC`);
+
+      // Calculate referral commission earnings
+      const commissionTransactions = await db
+        .select({
+          total: sql`COALESCE(SUM(CAST(amount AS numeric)), 0)`,
+        })
+        .from(txns)
+        .where(and(
+          eq(txns.userId, decoded.userId),
+          sql`${txns.type} = 'referral_commission'`
+        ));
+
+      const totalCommission = parseFloat(commissionTransactions[0]?.total as string) || 0;
+
+      res.json({
+        referralCode: user.referralCode,
+        totalReferrals: directReferrals.length,
+        totalCommission: totalCommission.toFixed(2),
+        referrals: directReferrals.map((r: any) => ({
+          id: r.id,
+          name: r.name,
+          joinedAt: r.joinedAt,
+          earnings: r.earnings,
+        })),
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch referral data" });
+    }
+  });
+
+  // ==========================================
+  // Admin: Payment Processing
+  // ==========================================
+
+  // Get pending deposit requests
+  app.get(`${API_PREFIX}/admin/deposits/pending`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid token" });
+
+      const admin = await storage.getUser(decoded.userId);
+      if (!admin || admin.role !== "admin") return res.status(403).json({ error: "Admin access required" });
+
+      const deposits = await db.select().from(depositRequests).where(eq(depositRequests.status, "pending")).orderBy(sql`${depositRequests.createdAt} DESC`);
+      res.json(deposits);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch deposits" });
+    }
+  });
+
+  // Approve a manual deposit
+  app.post(`${API_PREFIX}/admin/deposits/:id/approve`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid token" });
+
+      const admin = await storage.getUser(decoded.userId);
+      if (!admin || admin.role !== "admin") return res.status(403).json({ error: "Admin access required" });
+
+      const deposit = await storage.getDepositRequest(req.params.id);
+      if (!deposit) return res.status(404).json({ error: "Deposit not found" });
+      if (deposit.status !== "pending") return res.status(400).json({ error: "Deposit already processed" });
+
+      await db.transaction(async (tx) => {
+        // Credit user balance
+        const creditAmount = parseFloat(deposit.amount);
+        await tx
+          .update(users)
+          .set({ balance: sql`CAST(${users.balance} AS numeric) + ${creditAmount}` })
+          .where(eq(users.id, deposit.userId));
+
+        // Log completed transaction
+        await tx.insert(txns).values({
+          userId: deposit.userId,
+          type: "deposit",
+          amount: creditAmount.toFixed(2),
+          description: `Manual deposit approved by admin`,
+          status: "completed",
+        });
+      });
+
+      await storage.updateDepositRequest(req.params.id, { status: "approved" });
+      await cache.del(`user:${deposit.userId}`).catch(() => {});
+
+      res.json({ success: true, message: "Deposit approved and credited" });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to approve deposit" });
+    }
+  });
+
+  // Reject a manual deposit
+  app.post(`${API_PREFIX}/admin/deposits/:id/reject`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid token" });
+
+      const admin = await storage.getUser(decoded.userId);
+      if (!admin || admin.role !== "admin") return res.status(403).json({ error: "Admin access required" });
+
+      await storage.updateDepositRequest(req.params.id, {
+        status: "rejected",
+      });
+
+      res.json({ success: true, message: "Deposit rejected" });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to reject deposit" });
+    }
+  });
+
+  // Get pending withdrawal requests
+  app.get(`${API_PREFIX}/admin/withdrawals/pending`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid token" });
+
+      const admin = await storage.getUser(decoded.userId);
+      if (!admin || admin.role !== "admin") return res.status(403).json({ error: "Admin access required" });
+
+      const withdrawals = await db.select().from(withdrawalRequests).where(eq(withdrawalRequests.status, "pending")).orderBy(sql`${withdrawalRequests.createdAt} DESC`);
+      res.json(withdrawals);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch withdrawals" });
+    }
+  });
+
+  // Approve and process a withdrawal
+  app.post(`${API_PREFIX}/admin/withdrawals/:id/approve`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid token" });
+
+      const admin = await storage.getUser(decoded.userId);
+      if (!admin || admin.role !== "admin") return res.status(403).json({ error: "Admin access required" });
+
+      const withdrawal = await storage.getWithdrawalRequest(req.params.id);
+      if (!withdrawal) return res.status(404).json({ error: "Withdrawal not found" });
+      if (withdrawal.status !== "pending") return res.status(400).json({ error: "Withdrawal already processed" });
+
+      // Update withdrawal status to approved (balance already deducted when user submitted)
+      await storage.updateWithdrawalRequest(req.params.id, { status: "approved" });
+
+      // Update the corresponding pending transaction to completed
+      await db
+        .update(txns)
+        .set({ status: "completed", description: sql`${txns.description} || ' — approved'` })
+        .where(and(
+          eq(txns.userId, withdrawal.userId),
+          sql`${txns.type} = 'withdrawal'`,
+          sql`${txns.status} = 'pending'`
+        ));
+
+      res.json({ success: true, message: "Withdrawal approved" });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to approve withdrawal" });
+    }
+  });
+
+  // Reject a withdrawal — refund the balance back
+  app.post(`${API_PREFIX}/admin/withdrawals/:id/reject`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid token" });
+
+      const admin = await storage.getUser(decoded.userId);
+      if (!admin || admin.role !== "admin") return res.status(403).json({ error: "Admin access required" });
+
+      const withdrawal = await storage.getWithdrawalRequest(req.params.id);
+      if (!withdrawal) return res.status(404).json({ error: "Withdrawal not found" });
+      if (withdrawal.status !== "pending") return res.status(400).json({ error: "Withdrawal already processed" });
+
+      // Refund the balance back to user
+      await db.transaction(async (tx) => {
+        const refundAmount = parseFloat(withdrawal.amount);
+        await tx
+          .update(users)
+          .set({ balance: sql`CAST(${users.balance} AS numeric) + ${refundAmount}` })
+          .where(eq(users.id, withdrawal.userId));
+
+        await tx.insert(txns).values({
+          userId: withdrawal.userId,
+          type: "withdrawal_refund",
+          amount: refundAmount.toFixed(2),
+          description: `Withdrawal rejected — funds returned to wallet`,
+          status: "completed",
+        });
+      });
+
+      await storage.updateWithdrawalRequest(req.params.id, { status: "rejected" });
+      await cache.del(`user:${withdrawal.userId}`).catch(() => {});
+
+      res.json({ success: true, message: "Withdrawal rejected, balance refunded" });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to reject withdrawal" });
     }
   });
 }
