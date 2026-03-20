@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useLocation } from "wouter";
 import { TransactionTable } from "@/components/transaction-table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -17,13 +18,46 @@ import {
 import { DepositDialog } from "@/components/deposit-dialog";
 import { WithdrawDialog } from "@/components/withdraw-dialog";
 import { useAuth } from "@/hooks/use-auth-context";
+import { useToast } from "@/hooks/use-toast";
 
 export default function Wallet() {
-  const { user, loading } = useAuth();
+  const { user, loading, refreshProfile } = useAuth();
+  const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const [depositDialogOpen, setDepositDialogOpen] = useState(false);
   const [withdrawDialogOpen, setWithdrawDialogOpen] = useState(false);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [loadingTx, setLoadingTx] = useState(true);
+
+  // Handle Chapa payment return
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const paymentStatus = params.get("payment");
+    const txRef = params.get("tx_ref");
+
+    if (paymentStatus === "success" && txRef) {
+      // Verify the payment
+      fetch(`/api/v1/payments/verify/${txRef}`, { credentials: "include" })
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.status === "completed") {
+            toast({ title: "Payment successful! 🎉", description: "Your balance has been updated." });
+            refreshProfile();
+          } else {
+            toast({ title: "Payment processing", description: "Your payment is being verified." });
+          }
+        })
+        .catch(() => {});
+      // Clean URL
+      window.history.replaceState({}, "", "/wallet");
+    } else if (paymentStatus === "failed") {
+      toast({ title: "Payment failed", description: "Please try again.", variant: "destructive" });
+      window.history.replaceState({}, "", "/wallet");
+    } else if (paymentStatus === "error") {
+      toast({ title: "Payment error", description: "Something went wrong.", variant: "destructive" });
+      window.history.replaceState({}, "", "/wallet");
+    }
+  }, []);
 
   useEffect(() => {
     async function fetchTransactions() {

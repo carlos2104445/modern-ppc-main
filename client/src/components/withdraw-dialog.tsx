@@ -16,9 +16,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
-import { CreditCard, Building2, Wallet, CheckCircle, Plus } from "lucide-react";
+import {
+  Building2,
+  Wallet,
+  Loader2,
+  CheckCircle,
+  AlertTriangle,
+  CreditCard,
+} from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth-context";
 
 interface WithdrawDialogProps {
   open: boolean;
@@ -28,53 +35,84 @@ interface WithdrawDialogProps {
 
 export function WithdrawDialog({ open, onOpenChange, availableBalance }: WithdrawDialogProps) {
   const { toast } = useToast();
+  const { refreshProfile } = useAuth();
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("");
+  const [accountDetails, setAccountDetails] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [newBalance, setNewBalance] = useState<string | null>(null);
 
-  const withdrawalMethods = [
-    { id: "1", type: "PayPal", email: "john.doe@example.com", status: "verified" },
-    { id: "2", type: "Bank Transfer", account: "****1234", status: "verified" },
-    { id: "3", type: "Cryptocurrency", address: "0x742d...5e89", status: "pending" },
-  ];
+  const numBalance = parseFloat(availableBalance.replace(/[^0-9.]/g, "")) || 0;
+  const numAmount = parseFloat(amount) || 0;
+  const isValidAmount = numAmount >= 10 && numAmount <= numBalance;
 
-  const statusColors = {
-    verified: "bg-chart-2",
-    pending: "bg-chart-4",
-  };
-
-  const handleWithdraw = () => {
-    if (!amount || !method) {
-      toast({
-        title: "Missing information",
-        description: "Please enter amount and select withdrawal method.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    const numAmount = parseFloat(amount);
-    if (numAmount < 10) {
-      toast({
-        title: "Invalid amount",
-        description: "Minimum withdrawal is ETB 10.00",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    console.log("Withdraw:", { amount, method });
-    toast({
-      title: "Withdrawal requested",
-      description: `Your withdrawal of ETB ${amount} has been submitted for processing.`,
-    });
+  const resetForm = () => {
     setAmount("");
     setMethod("");
-    onOpenChange(false);
+    setAccountDetails("");
+    setLoading(false);
+    setSubmitted(false);
+    setNewBalance(null);
+  };
+
+  const handleClose = (open: boolean) => {
+    if (!open) resetForm();
+    onOpenChange(open);
+  };
+
+  const handleWithdraw = async () => {
+    if (!isValidAmount) {
+      toast({
+        title: "Invalid amount",
+        description: numAmount < 10
+          ? "Minimum withdrawal is ETB 10.00"
+          : `Insufficient balance. You have ${availableBalance}`,
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!method) {
+      toast({ title: "Missing method", description: "Select a withdrawal method", variant: "destructive" });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await fetch("/api/v1/payments/withdraw", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          amount: numAmount.toFixed(2),
+          method,
+          accountDetails,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setSubmitted(true);
+        setNewBalance(data.newBalance);
+        await refreshProfile();
+        toast({
+          title: "Withdrawal submitted",
+          description: data.message,
+        });
+      } else {
+        const err = await res.json();
+        toast({ title: "Error", description: err.error, variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Error", description: "Network error. Try again.", variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+    <Dialog open={open} onOpenChange={handleClose}>
+      <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Wallet className="h-5 w-5" />
@@ -83,118 +121,137 @@ export function WithdrawDialog({ open, onOpenChange, availableBalance }: Withdra
           <DialogDescription>Request a withdrawal to your preferred method</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-6">
-          <div className="p-4 rounded-lg bg-muted/50">
-            <p className="text-sm text-muted-foreground">Available Balance</p>
-            <p className="text-3xl font-bold mt-1">{availableBalance}</p>
+        {submitted ? (
+          <div className="text-center py-6 space-y-3">
+            <CheckCircle className="h-12 w-12 text-chart-2 mx-auto" />
+            <h3 className="font-semibold text-lg">Withdrawal Submitted</h3>
+            <p className="text-sm text-muted-foreground">
+              Your withdrawal of <strong>ETB {numAmount.toFixed(2)}</strong> via{" "}
+              <strong className="capitalize">{method.replace(/_/g, " ")}</strong> has been submitted for processing.
+            </p>
+            {newBalance && (
+              <p className="text-sm">
+                New balance: <strong>ETB {parseFloat(newBalance).toFixed(2)}</strong>
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Processing typically takes 1-3 business days.
+            </p>
+            <Button variant="outline" onClick={() => handleClose(false)} className="mt-2">
+              Close
+            </Button>
           </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="space-y-4">
-              <h3 className="font-semibold">Withdrawal Details</h3>
-
-              <div className="space-y-2">
-                <Label htmlFor="withdraw-amount">
-                  Amount <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  id="withdraw-amount"
-                  type="number"
-                  placeholder="0.00"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  data-testid="input-withdraw-amount"
-                />
-                <p className="text-xs text-muted-foreground">Minimum withdrawal: ETB 10.00</p>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="withdraw-method">
-                  Withdrawal Method <span className="text-destructive">*</span>
-                </Label>
-                <Select value={method} onValueChange={setMethod}>
-                  <SelectTrigger id="withdraw-method" data-testid="select-withdraw-method">
-                    <SelectValue placeholder="Select method" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="paypal">PayPal - john.doe@example.com</SelectItem>
-                    <SelectItem value="bank">Bank Transfer - ****1234</SelectItem>
-                    <SelectItem value="crypto">Cryptocurrency - 0x742d...5e89</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="p-4 rounded-lg border border-border">
-                <h4 className="font-semibold mb-2 text-sm">Processing Information</h4>
-                <ul className="text-xs text-muted-foreground space-y-1">
-                  <li>• Processing time: 1-3 business days</li>
-                  <li>• Transaction fee: 2% (minimum ETB 0.50)</li>
-                  <li>• KYC verification required for withdrawals over ETB 100</li>
-                </ul>
-              </div>
+        ) : (
+          <div className="space-y-4">
+            {/* Balance display */}
+            <div className="p-4 rounded-lg bg-muted/50">
+              <p className="text-sm text-muted-foreground">Available Balance</p>
+              <p className="text-3xl font-bold mt-1">{availableBalance}</p>
             </div>
 
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="font-semibold">Withdrawal Methods</h3>
-                <Button variant="ghost" size="sm" data-testid="button-add-withdrawal-method">
-                  <Plus className="h-4 w-4" />
+            {/* Amount */}
+            <div className="space-y-2">
+              <Label>Amount (ETB) <span className="text-destructive">*</span></Label>
+              <Input
+                type="number"
+                placeholder="0.00"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                min="10"
+                max={numBalance}
+                data-testid="input-withdraw-amount"
+              />
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>Min: ETB 10.00</span>
+                <Button
+                  variant="ghost"
+                  className="h-auto p-0 text-xs text-primary"
+                  onClick={() => setAmount(numBalance.toFixed(2))}
+                >
+                  Max: ETB {numBalance.toFixed(2)}
                 </Button>
               </div>
+              {numAmount > numBalance && (
+                <div className="flex items-center gap-1 text-destructive text-xs">
+                  <AlertTriangle className="h-3 w-3" /> Exceeds available balance
+                </div>
+              )}
+            </div>
 
-              <div className="space-y-3">
-                {withdrawalMethods.map((methodItem) => (
-                  <div
-                    key={methodItem.id}
-                    className="p-3 rounded-lg border border-card-border hover-elevate"
-                  >
-                    <div className="flex items-start justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        {methodItem.type === "PayPal" && <CreditCard className="h-4 w-4" />}
-                        {methodItem.type === "Bank Transfer" && <Building2 className="h-4 w-4" />}
-                        {methodItem.type === "Cryptocurrency" && <Wallet className="h-4 w-4" />}
-                        <span className="font-medium text-sm">{methodItem.type}</span>
-                      </div>
-                      <Badge
-                        variant="outline"
-                        className={statusColors[methodItem.status as keyof typeof statusColors]}
-                      >
-                        {methodItem.status === "verified" && (
-                          <CheckCircle className="h-3 w-3 mr-1" />
-                        )}
-                        {methodItem.status}
-                      </Badge>
+            {/* Method */}
+            <div className="space-y-2">
+              <Label>Withdrawal Method <span className="text-destructive">*</span></Label>
+              <Select value={method} onValueChange={setMethod}>
+                <SelectTrigger data-testid="select-withdraw-method">
+                  <SelectValue placeholder="Select method" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="bank_transfer">
+                    <div className="flex items-center gap-2">
+                      <Building2 className="h-4 w-4" /> Bank Transfer
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                      {"email" in methodItem && methodItem.email}
-                      {"account" in methodItem && methodItem.account}
-                      {"address" in methodItem && methodItem.address}
-                    </p>
-                  </div>
-                ))}
-              </div>
+                  </SelectItem>
+                  <SelectItem value="telebirr">
+                    <div className="flex items-center gap-2">
+                      <CreditCard className="h-4 w-4" /> Telebirr
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="cbe_birr">
+                    <div className="flex items-center gap-2">
+                      <CreditCard className="h-4 w-4" /> CBE Birr
+                    </div>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Account details */}
+            <div className="space-y-2">
+              <Label>Account Details <span className="text-destructive">*</span></Label>
+              <Input
+                placeholder={
+                  method === "bank_transfer"
+                    ? "Bank name & account number"
+                    : method === "telebirr" || method === "cbe_birr"
+                    ? "Phone number"
+                    : "Enter account details"
+                }
+                value={accountDetails}
+                onChange={(e) => setAccountDetails(e.target.value)}
+                data-testid="input-account-details"
+              />
+            </div>
+
+            {/* Processing info */}
+            <div className="p-3 rounded-lg border border-border">
+              <h4 className="font-semibold mb-1.5 text-sm">Processing Information</h4>
+              <ul className="text-xs text-muted-foreground space-y-0.5">
+                <li>• Processing time: 1-3 business days</li>
+                <li>• Balance is deducted immediately</li>
+                <li>• You will be notified once processed</li>
+              </ul>
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3">
+              <Button variant="outline" onClick={() => handleClose(false)} className="flex-1">
+                Cancel
+              </Button>
+              <Button
+                onClick={handleWithdraw}
+                className="flex-1"
+                disabled={loading || !isValidAmount || !method || !accountDetails}
+                data-testid="button-submit-withdraw"
+              >
+                {loading ? (
+                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Processing...</>
+                ) : (
+                  `Withdraw ETB ${numAmount > 0 ? numAmount.toFixed(2) : "0.00"}`
+                )}
+              </Button>
             </div>
           </div>
-
-          <div className="flex gap-3">
-            <Button
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-              className="flex-1"
-              data-testid="button-cancel-withdraw"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={handleWithdraw}
-              className="flex-1"
-              disabled={!amount || !method}
-              data-testid="button-submit-withdraw"
-            >
-              Submit Withdrawal Request
-            </Button>
-          </div>
-        </div>
+        )}
       </DialogContent>
     </Dialog>
   );

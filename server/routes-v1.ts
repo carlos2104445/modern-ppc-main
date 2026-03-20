@@ -608,6 +608,325 @@ export function registerV1Routes(app: Express): void {
   });
 
   // ==========================================
+  // Payment routes — Chapa + Manual
+  // ==========================================
+
+  // Deposit via Chapa (automated)
+  app.post(`${API_PREFIX}/payments/deposit`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid token" });
+
+      const user = await storage.getUser(decoded.userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      const { amount } = req.body;
+      const numAmount = parseFloat(amount);
+      if (isNaN(numAmount) || numAmount < 10) {
+        return res.status(400).json({ error: "Minimum deposit is ETB 10.00" });
+      }
+
+      const { chapaService } = await import("./chapa");
+      const txRef = chapaService.generateTxRef();
+
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+
+      // Initialize Chapa payment
+      const chapaResponse = await chapaService.initializePayment({
+        amount: numAmount.toFixed(2),
+        currency: "ETB",
+        email: user.email,
+        first_name: user.firstName,
+        last_name: user.lastName,
+        phone_number: user.phoneNumber,
+        tx_ref: txRef,
+        callback_url: `${baseUrl}/api/v1/payments/verify/${txRef}`,
+        return_url: `${baseUrl}/wallet?payment=success&tx_ref=${txRef}`,
+        customization: {
+          title: "AdConnect Deposit",
+          description: `Deposit ETB ${numAmount.toFixed(2)} to your wallet`,
+        },
+      });
+
+      // Save payment record to DB
+      await storage.createChapaPayment({
+        userId: decoded.userId,
+        txRef,
+        amount: numAmount.toFixed(2),
+        currency: "ETB",
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        phoneNumber: user.phoneNumber,
+        status: "pending",
+        checkoutUrl: chapaResponse.data.checkout_url,
+      });
+
+      res.json({
+        checkoutUrl: chapaResponse.data.checkout_url,
+        txRef,
+      });
+    } catch (error: any) {
+      console.error("Deposit error:", error);
+      res.status(500).json({ error: error.message || "Failed to initiate deposit" });
+    }
+  });
+
+  // Deposit manually (bank transfer, etc.)
+  app.post(`${API_PREFIX}/payments/deposit/manual`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid token" });
+
+      const user = await storage.getUser(decoded.userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      const { amount, method, reference } = req.body;
+      const numAmount = parseFloat(amount);
+      if (isNaN(numAmount) || numAmount < 10) {
+        return res.status(400).json({ error: "Minimum deposit is ETB 10.00" });
+      }
+      if (!method) return res.status(400).json({ error: "Payment method required" });
+
+      const txRef = `manual-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+      // Create a pending deposit request for admin review
+      await storage.createDepositRequest({
+        userId: decoded.userId,
+        amount: numAmount.toFixed(2),
+        method,
+        status: "pending",
+      });
+
+      // Also log as a pending transaction
+      await db.insert(txns).values({
+        userId: decoded.userId,
+        type: "deposit",
+        amount: numAmount.toFixed(2),
+        description: `Manual deposit via ${method}${reference ? ` (ref: ${reference})` : ""} — pending admin approval`,
+        status: "pending",
+      });
+
+      res.json({
+        success: true,
+        message: "Your deposit request has been submitted. It will be credited after admin verification.",
+        txRef,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to submit deposit" });
+    }
+  });
+
+  // Verify Chapa payment (callback + manual check)
+  app.get(`${API_PREFIX}/payments/verify/:txRef`, async (req, res) => {
+    try {
+      const { txRef } = req.params;
+      if (!txRef) return res.status(400).json({ error: "Transaction reference required" });
+
+      const payment = await storage.getChapaPaymentByTxRef(txRef);
+      if (!payment) return res.status(404).json({ error: "Payment not found" });
+
+      // Already completed
+      if (payment.status === "completed") {
+        return res.json({ status: "completed", message: "Payment already credited" });
+      }
+
+      // Verify with Chapa
+      const { chapaService } = await import("./chapa");
+      const verification = await chapaService.verifyPayment(txRef);
+
+      if (verification.data.status === "success") {
+        // Update payment record
+        await storage.updateChapaPayment(payment.id, {
+          status: "completed",
+          chapaReference: verification.data.reference,
+          paymentMethod: verification.data.method,
+          charge: verification.data.charge,
+          mode: verification.data.mode,
+          type: verification.data.type,
+          completedAt: new Date(),
+        });
+
+        // Credit user balance
+        const creditAmount = parseFloat(payment.amount);
+        await db
+          .update(users)
+          .set({ balance: sql`CAST(${users.balance} AS numeric) + ${creditAmount}` })
+          .where(eq(users.id, payment.userId));
+
+        // Log the deposit transaction
+        await db.insert(txns).values({
+          userId: payment.userId,
+          type: "deposit",
+          amount: creditAmount.toFixed(2),
+          description: `Chapa deposit — ${verification.data.method || "online payment"}`,
+          status: "completed",
+        });
+
+        // Invalidate cache
+        await cache.del(`user:${payment.userId}`);
+
+        // Redirect back to wallet (for browser callbacks)
+        if (req.headers.accept?.includes("text/html")) {
+          return res.redirect(`/wallet?payment=success&amount=${payment.amount}`);
+        }
+
+        return res.json({ status: "completed", message: "Payment verified and credited" });
+      }
+
+      // Payment not yet successful
+      await storage.updateChapaPayment(payment.id, {
+        status: verification.data.status || "failed",
+      });
+
+      if (req.headers.accept?.includes("text/html")) {
+        return res.redirect(`/wallet?payment=failed`);
+      }
+
+      res.json({ status: verification.data.status, message: "Payment not yet completed" });
+    } catch (error: any) {
+      console.error("Verification error:", error);
+      if (req.headers.accept?.includes("text/html")) {
+        return res.redirect(`/wallet?payment=error`);
+      }
+      res.status(500).json({ error: error.message || "Verification failed" });
+    }
+  });
+
+  // Withdraw funds
+  app.post(`${API_PREFIX}/payments/withdraw`, async (req, res) => {
+    try {
+      const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+
+      const decoded = jwtService.verifyAccessToken(token);
+      if (!decoded) return res.status(401).json({ error: "Invalid token" });
+
+      const user = await storage.getUser(decoded.userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      const { amount, method, accountDetails } = req.body;
+      const numAmount = parseFloat(amount);
+      if (isNaN(numAmount) || numAmount < 10) {
+        return res.status(400).json({ error: "Minimum withdrawal is ETB 10.00" });
+      }
+      if (!method) return res.status(400).json({ error: "Withdrawal method required" });
+
+      const userBalance = parseFloat(user.balance);
+      if (userBalance < numAmount) {
+        return res.status(400).json({
+          error: `Insufficient balance. You have ETB ${userBalance.toFixed(2)}`,
+        });
+      }
+
+      // Deduct from balance immediately (to prevent double-withdrawal)
+      const newBalance = (userBalance - numAmount).toFixed(2);
+      await db
+        .update(users)
+        .set({ balance: newBalance })
+        .where(eq(users.id, decoded.userId));
+
+      // Create withdrawal request for admin processing
+      await storage.createWithdrawalRequest({
+        userId: decoded.userId,
+        amount: numAmount.toFixed(2),
+        method,
+        status: "pending",
+      });
+
+      // Log the withdrawal transaction
+      await db.insert(txns).values({
+        userId: decoded.userId,
+        type: "withdrawal",
+        amount: `-${numAmount.toFixed(2)}`,
+        description: `Withdrawal via ${method}${accountDetails ? ` to ${accountDetails}` : ""} — processing`,
+        status: "pending",
+      });
+
+      // Invalidate cache
+      await cache.del(`user:${decoded.userId}`);
+
+      res.json({
+        success: true,
+        message: "Withdrawal request submitted. Processing typically takes 1-3 business days.",
+        newBalance,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to process withdrawal" });
+    }
+  });
+
+  // Chapa webhook handler
+  app.post(`${API_PREFIX}/webhooks/chapa`, async (req, res) => {
+    try {
+      const { chapaService } = await import("./chapa");
+      const signature = req.headers["chapa-signature"] as string || "";
+      const payload = JSON.stringify(req.body);
+
+      // Verify webhook signature
+      if (signature && !chapaService.verifyWebhookSignature(payload, signature)) {
+        return res.status(403).json({ error: "Invalid webhook signature" });
+      }
+
+      const { event, data } = req.body;
+      if (!data?.tx_ref) return res.status(400).json({ error: "Missing tx_ref" });
+
+      const payment = await storage.getChapaPaymentByTxRef(data.tx_ref);
+      if (!payment) return res.status(404).json({ error: "Payment not found" });
+
+      if (payment.status === "completed") {
+        return res.json({ status: "already_processed" });
+      }
+
+      if (data.status === "success") {
+        // Update payment record
+        await storage.updateChapaPayment(payment.id, {
+          status: "completed",
+          chapaReference: data.reference,
+          paymentMethod: data.method,
+          charge: data.charge,
+          mode: data.mode,
+          type: data.type,
+          completedAt: new Date(),
+        });
+
+        // Credit user balance
+        const creditAmount = parseFloat(payment.amount);
+        await db
+          .update(users)
+          .set({ balance: sql`CAST(${users.balance} AS numeric) + ${creditAmount}` })
+          .where(eq(users.id, payment.userId));
+
+        // Log the deposit transaction
+        await db.insert(txns).values({
+          userId: payment.userId,
+          type: "deposit",
+          amount: creditAmount.toFixed(2),
+          description: `Chapa deposit — ${data.method || "online payment"}`,
+          status: "completed",
+        });
+
+        await cache.del(`user:${payment.userId}`);
+      } else {
+        await storage.updateChapaPayment(payment.id, {
+          status: data.status || "failed",
+        });
+      }
+
+      res.json({ status: "ok" });
+    } catch (error: any) {
+      console.error("Webhook error:", error);
+      res.status(500).json({ error: "Webhook processing failed" });
+    }
+  });
+
+  // ==========================================
   // Campaign routes (with escrow/refund)
   // ==========================================
 
