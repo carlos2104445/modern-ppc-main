@@ -46,7 +46,7 @@ export function CreateCampaignDialog({ open, onOpenChange }: CreateCampaignDialo
     return videoId ? `https://www.youtube.com/embed/${videoId}` : "";
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!campaignName || !budget || !cpc) {
       toast({
         title: "Missing information",
